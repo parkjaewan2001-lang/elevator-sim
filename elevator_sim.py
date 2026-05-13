@@ -2,10 +2,10 @@ import streamlit as st
 import random
 
 # ----------------- STREAMLIT UI SETTINGS -----------------
-st.set_page_config(page_title="Custom Arena Simulator Pro", layout="wide")
+st.set_page_config(page_title="Advanced Elevator Simulator Pro", layout="wide")
 
 st.title("🏢 Advanced Elevator Simulator Pro")
-st.caption("기계 성능(속도, 문 개폐 시간) 및 다중 엘리베이터 최적화 시뮬레이션")
+st.caption("건물 규모, 기계 성능 및 시간대별 승객 유입 비율 조정 시뮬레이션")
 
 # ----------------- SIDEBAR: CONFIGURATION -----------------
 with st.sidebar:
@@ -17,31 +17,36 @@ with st.sidebar:
     st.divider()
     
     st.header("⚡ 엘리베이터 성능 설정")
-    # 사용자가 직접 시간을 조정하는 부분
     sec_per_floor = st.number_input("한 층 이동 시간 (초)", min_value=0.1, max_value=10.0, value=2.5, step=0.1)
     door_time = st.number_input("문 개폐 사이클 시간 (초)", min_value=1.0, max_value=20.0, value=7.0, step=0.5)
-    st.info(f"💡 현재 설정: 10층 이동 시 {10 * sec_per_floor:.1f}초 소요")
+
+    st.divider()
+    
+    st.header("⚙️ 상황 및 비율 설정")
+    mode_label = st.radio("시간대 선택", ["출근 시간", "퇴근 시간", "그 외 시간"])
+    mode_map = {"출근 시간": "morning", "퇴근 시간": "evening", "그 외 시간": "normal"}
+    current_mode = mode_map[mode_label]
+
+    if current_mode == "morning":
+        st.subheader("🌅 출근 목적지 비율")
+        morning_dest_ratio = st.slider("1층 하행 vs 지하 하행", 0, 100, 70, help="높을수록 1층으로 가는 인원이 많아집니다.")
+        st.write(f"1층행: {morning_dest_ratio}% / 지하행: {100-morning_dest_ratio}%")
+    elif current_mode == "evening":
+        st.subheader("🌇 퇴근 출발지 비율")
+        evening_start_ratio = st.slider("1층 상행 vs 지하 상행", 0, 100, 70, help="높을수록 1층에서 탑승하는 인원이 많아집니다.")
+        st.write(f"1층 출발: {evening_start_ratio}% / 지하 출발: {100-evening_start_ratio}%")
 
     st.divider()
     
     st.header("🎯 승객 요구 목표 시간 (초)")
-    target_b_res = st.number_input("지하 → 거주층 목표", value=86)
-    target_f1res = st.number_input("1층 → 거주층 목표", value=47)
-    target_res1f = st.number_input("거주층 → 1층 목표", value=83)
+    target_res_b = st.number_input("거주층 ↔ 지하 목표", value=75)
+    target_res1f = st.number_input("거주층 ↔ 1층 목표", value=83)
+    target_f1res = st.number_input("1층 ↔ 거주층 목표", value=47)
     
-    st.divider()
-    
-    st.header("⚙️ 상황 설정")
-    mode_label = st.radio("시간대 선택", ["퇴근 시간", "출근 시간", "그 외 시간"])
-    mode_map = {"출근 시간": "morning", "퇴근 시간": "evening", "그 외 시간": "normal"}
-    current_mode = mode_map[mode_label]
-    
-    # 층 레이블 생성
     FLOOR_LABELS = [f"B{i}" for i in range(min_f, 0, -1)] + [f"{i}F" for i in range(1, max_f + 1)]
     TOTAL_FLOORS = len(FLOOR_LABELS)
     idx_1f = min_f
 
-    # 엘리베이터별 대기층 설정
     st.subheader("엘리베이터 대기 전략")
     idle_positions = []
     cols = st.columns(2)
@@ -53,19 +58,34 @@ with st.sidebar:
     run_btn = st.button("시뮬레이션 실행", type="primary", use_container_width=True)
 
 # ----------------- SIMULATION ENGINE -----------------
-def run_simulation(mode, idles, f1_idx, total_fs, s_per_f, d_time):
-    stats = {'resTo1F': [], 'f1ToRes': [], 'bToRes': []}
+def run_simulation(mode, idles, f1_idx, total_fs, s_per_f, d_time, ratio):
+    stats = {'resTo1F': [], 'f1ToRes': [], 'resToB': [], 'bToRes': []}
     num_trips = 1500
     elevator_positions = list(idles)
 
     for _ in range(num_trips):
         r = random.random()
-        # 승객 동선 결정 로직
-        if mode == 'evening':
-            if r < 0.70:
-                start_idx, end_idx = f1_idx, random.randint(min(f1_idx + 5, total_fs-1), total_fs - 1)
-            elif r < 0.90:
-                start_idx, end_idx = random.randint(0, max(0, f1_idx - 1)), random.randint(min(f1_idx + 5, total_fs-1), total_fs - 1)
+        ratio_f = ratio / 100.0
+
+        if mode == 'morning':
+            if r < 0.85: # 출근 하행 집중
+                start_idx = random.randint(min(f1_idx + 5, total_fs-1), total_fs - 1)
+                # 사용자가 설정한 비율에 따라 목적지 결정
+                if random.random() < ratio_f:
+                    end_idx = f1_idx # 1층행
+                else:
+                    end_idx = random.randint(0, max(0, f1_idx - 1)) # 지하행
+            else:
+                start_idx, end_idx = random.randint(0, total_fs - 1), random.randint(0, total_fs - 1)
+        
+        elif mode == 'evening':
+            if r < 0.85: # 퇴근 상행 집중
+                # 사용자가 설정한 비율에 따라 출발지 결정
+                if random.random() < ratio_f:
+                    start_idx = f1_idx # 1층 출발
+                else:
+                    start_idx = random.randint(0, max(0, f1_idx - 1)) # 지하 출발
+                end_idx = random.randint(min(f1_idx + 5, total_fs-1), total_fs - 1)
             else:
                 start_idx, end_idx = random.randint(0, total_fs - 1), random.randint(0, total_fs - 1)
         else:
@@ -73,22 +93,20 @@ def run_simulation(mode, idles, f1_idx, total_fs, s_per_f, d_time):
 
         if start_idx == end_idx: continue
 
-        # 가장 가까운 엘리베이터 배정
         distances = [abs(pos - start_idx) for pos in elevator_positions]
         chosen_idx = distances.index(min(distances))
         
-        # 입력받은 's_per_f'와 'd_time'을 연산에 직접 사용
         wait_time = min(distances) * s_per_f
         travel_time = abs(start_idx - end_idx) * s_per_f
-        # 총 시간 = 대기 이동 + 문 열림(출발층) + 주행 이동 + 문 열림(도착층)
         total_time = wait_time + travel_time + (d_time * 2)
         
         elevator_positions[chosen_idx] = end_idx
         
-        # 결과 분류
-        if start_idx < f1_idx and end_idx > f1_idx + 4: stats['bToRes'].append(total_time)
+        # 통계 기록
+        if start_idx > f1_idx + 4 and end_idx == f1_idx: stats['resTo1F'].append(total_time)
+        elif start_idx > f1_idx + 4 and end_idx < f1_idx: stats['resToB'].append(total_time)
         elif start_idx == f1_idx and end_idx > f1_idx + 4: stats['f1ToRes'].append(total_time)
-        elif start_idx > f1_idx + 4 and end_idx == f1_idx: stats['resTo1F'].append(total_time)
+        elif start_idx < f1_idx and end_idx > f1_idx + 4: stats['bToRes'].append(total_time)
 
     return {k: (sum(v)/len(v) if v else 0) for k, v in stats.items()}
 
@@ -105,15 +123,26 @@ with col_b:
             {floor} <span style="color:#818cf8">{elev_icons}</span></div>""", unsafe_allow_html=True)
 
 with col_r:
-    st.subheader("📊 성능 분석 결과")
+    mode_title = "출근 시간" if current_mode == "morning" else "퇴근 시간" if current_mode == "evening" else "일반 시간"
+    st.subheader(f"📊 {mode_title} 분석 결과")
+    
     if run_btn:
-        res = run_simulation(current_mode, idle_positions, idx_1f, TOTAL_FLOORS, sec_per_floor, door_time)
+        active_ratio = morning_dest_ratio if current_mode == "morning" else evening_start_ratio if current_mode == "evening" else 50
+        res = run_simulation(current_mode, idle_positions, idx_1f, TOTAL_FLOORS, sec_per_floor, door_time, active_ratio)
         
-        metrics = [
-            ("주차장 (지하→거주층)", res['bToRes'], target_b_res),
-            ("로비 (1층→거주층)", res['f1ToRes'], target_f1res),
-            ("외출 (거주층→1층)", res['resTo1F'], target_res1f)
-        ]
+        # 모드별 결과 표시 순서 최적화
+        if current_mode == "morning":
+            metrics = [
+                ("하행 (거주층→1층)", res['resTo1F'], target_res1f),
+                ("하행 (거주층→지하)", res['resToB'], target_res_b),
+                ("상행 (1층→거주층)", res['f1ToRes'], target_f1res)
+            ]
+        else:
+            metrics = [
+                ("상행 (1층→거주층)", res['f1ToRes'], target_f1res),
+                ("상행 (지하→거주층)", res['bToRes'], target_res_b),
+                ("하행 (거주층→1층)", res['resTo1F'], target_res1f)
+            ]
 
         for label, actual, target in metrics:
             diff = actual - target
@@ -124,9 +153,9 @@ with col_r:
                           delta=f"{diff:+.1f}초 (목표 대비)", 
                           delta_color="normal" if is_ok else "inverse")
             with c2:
-                st.progress(min(actual / target, 1.2) / 1.2)
+                st.progress(min(actual / target, 1.5) / 1.5)
                 if is_ok: st.success(f"✅ 목표 달성 (목표: {target}s)")
                 else: st.error(f"⚠️ 지연 발생 (목표: {target}s)")
             st.divider()
     else:
-        st.info("왼쪽 사이드바에서 기계 성능을 조절한 뒤 실행해 보세요!")
+        st.info("비율을 조정한 뒤 시뮬레이션 버튼을 눌러주세요.")
