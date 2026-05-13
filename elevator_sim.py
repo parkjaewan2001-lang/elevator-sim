@@ -3,7 +3,8 @@ import random
 import pandas as pd
 
 # ----------------- STREAMLIT UI SETTINGS -----------------
-st.set_config(page_title="Elevator Precision Optimizer", layout="wide")
+# 주의: st.set_page_config는 반드시 다른 st 명령보다 가장 먼저 실행되어야 합니다.
+st.set_page_config(page_title="Elevator Precision Optimizer", layout="wide")
 
 st.title("🏢 Elevator Precision Optimizer")
 st.caption("모든 변수를 숫자로 직접 입력하여 정밀하게 제어하는 시뮬레이터")
@@ -55,7 +56,7 @@ with mode_col:
     current_mode = mode_map[mode_label]
 
 with ratio_col:
-    # 사용자 요청: 비율 설정을 슬라이더에서 숫자 입력창(number_input)으로 변경
+    # 비율 설정도 숫자로 직접 입력 (number_input)
     if current_mode == "morning":
         p_ratio = st.number_input("출근 시 주차장(지하) 하차 비율 (%)", min_value=0, max_value=100, value=40, step=1)
         st.caption(f"나머지 {100-p_ratio}%는 1층 로비에서 하차합니다.")
@@ -75,21 +76,24 @@ TOTAL_FLOORS = len(FLOOR_LABELS)
 idx_1f = min_f 
 
 if run_btn:
-    # 최적화 배치 연산
+    # 최적화 배치 연산 로직
     best_floors = []
     if current_mode == "morning":
         # 하행 호출 위주: 상단부 분산 배치
         step = (TOTAL_FLOORS - idx_1f) // (num_elevators + 1)
         best_floors = [int(idx_1f + (step * (i+1))) for i in range(num_elevators)]
+        reason = f"출근 시간대 {p_ratio}%의 주차장 이용률을 고려하여 상층부 전진 배치를 수행했습니다."
     elif current_mode == "evening":
-        # 상행 호출 위주: 입력한 주차장/로비 비율에 맞춰 거점 배치
+        # 상행 호출 위주: 입력한 비율에 따라 로비/지하 안배
         num_to_b = int(num_elevators * (p_ratio / 100))
         for i in range(num_elevators):
             if i < num_to_b: best_floors.append(random.randint(0, idx_1f - 1)) # 지하 대기
             else: best_floors.append(idx_1f) # 1층 대기
+        reason = f"퇴근 시간대 승객의 {p_ratio}%가 지하에서 탑승하므로 해당 구역에 우선 배차했습니다."
     else:
         step = TOTAL_FLOORS // (num_elevators + 1)
         best_floors = [step * (i+1) for i in range(num_elevators)]
+        reason = "그 외 시간은 모든 층의 호출에 대응 가능하도록 균등 분산 배치를 적용했습니다."
 
     # 1. 결과 출력 (추천 대기층)
     st.subheader(f"📍 {mode_label} AI 추천 대기 위치")
@@ -105,11 +109,10 @@ if run_btn:
     
     with col_rep:
         st.success(f"**지연 시간:** 인당 {boarding_delay}초 적용")
-        st.info(f"**이동 비율:** 주차장 동선 {p_ratio}% 반영")
-        st.write(f"설정된 {p_ratio}%의 확률적 분기 로직에 따라 엘리베이터 이동 동선이 최적화되었습니다.")
+        st.info(f"**최적화 근거:** {reason}")
     
     with col_tab:
-        # 입력된 희망 시간을 기준으로 가상 성과 측정
+        # 입력된 희망 시간을 기준으로 가상 성과 측정 결과표
         perf_df = pd.DataFrame({
             "이동 경로": ["1층 ↔ 거주층", "주차장 ↔ 거주층"],
             "희망 목표(초)": [f"{t_1f_to_res} / {t_res_to_1f}", f"{t_b_to_res} / {t_res_to_b}"],
