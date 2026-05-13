@@ -1,176 +1,120 @@
 import streamlit as st
 import random
-import pandas as pd
-
-# ----------------- CONSTANTS & HELPERS -----------------
-FLOOR_LABELS = [
-    'B5', 'B4', 'B3', 'B2', 'B1',
-    '1F', '2F', '3F', '4F', '5F', '6F', '7F', '8F', '9F', '10F',
-    '11F', '12F', '13F', '14F', '15F', '16F', '17F', '18F', '19F', '20F',
-    '21F', '22F', '23F', '24F', '25F', '26F', '27F', '28F', '29F', '30F'
-]
-
-TARGETS = {
-    'resTo1F': 83,
-    'f1ToRes': 47,
-    'resToB': 75
-}
-
-TIME_PER_FLOOR = 2.5
-DOOR_CYCLE = 7.0  # Open 3.5s + Close 3.5s
-
-def is_res(idx): return idx >= 10  # 6F(idx 10) to 30F
-def is_b(idx): return 0 <= idx <= 4 # B5 to B1
-def is_1f(idx): return idx == 5    # 1F
-
-# ----------------- SIMULATION ENGINE -----------------
-def run_simulation(mode, idle_a_idx, idle_b_idx):
-    stats = {'resTo1F': [], 'f1ToRes': [], 'resToB': []}
-    num_trips = 1500
-    
-    pos_a = idle_a_idx
-    pos_b = idle_b_idx
-
-    for _ in range(num_trips):
-        r = random.random()
-        start_idx, end_idx = 0, 0
-
-        if mode == 'morning':
-            if r < 0.85: # Downward
-                start_idx = random.randint(10, 34)
-                end_idx = random.randint(0, 4) if random.random() < 0.33 else 5
-            elif r < 0.95: # Upward
-                start_idx = random.randint(0, 4) if random.random() < 0.33 else 5
-                end_idx = random.randint(10, 34)
-            else: # Inter-floor
-                start_idx = random.randint(10, 34)
-                end_idx = random.randint(10, 34)
-        elif mode == 'evening':
-            if r < 0.85: # Upward (퇴근 시간 집중)
-                start_idx = random.randint(0, 4) if random.random() < 0.33 else 5
-                end_idx = random.randint(10, 34)
-            elif r < 0.95: # Downward
-                start_idx = random.randint(10, 34)
-                end_idx = random.randint(0, 4) if random.random() < 0.33 else 5
-            else:
-                start_idx = random.randint(10, 34)
-                end_idx = random.randint(10, 34)
-        else: # Normal
-            start_idx = random.randint(0, 34)
-            end_idx = random.randint(0, 34)
-            while start_idx == end_idx: end_idx = random.randint(0, 34)
-
-        # Assign closest elevator
-        dist_a = abs(pos_a - start_idx)
-        dist_b = abs(pos_b - start_idx)
-        
-        if dist_a <= dist_b:
-            chosen_wait_dist = dist_a
-            pos_a = end_idx
-        else:
-            chosen_wait_dist = dist_b
-            pos_b = end_idx
-
-        travel_dist = abs(start_idx - end_idx)
-        total_time = (chosen_wait_dist * TIME_PER_FLOOR) + DOOR_CYCLE + (travel_dist * TIME_PER_FLOOR) + DOOR_CYCLE
-        
-        # Stops penalty
-        stops = 0
-        if mode in ['morning', 'evening']:
-            if travel_dist > 12: stops += random.randint(0, 2)
-            if chosen_wait_dist > 15: stops += random.randint(1, 3)
-            if chosen_wait_dist > 25: stops += random.randint(2, 4)
-        elif travel_dist > 15 and random.random() > 0.5:
-            stops += 1
-        
-        total_time += stops * (DOOR_CYCLE * 0.8 + random.uniform(0.5, 2.0))
-
-        if is_res(start_idx) and is_1f(end_idx): stats['resTo1F'].append(total_time)
-        if is_1f(start_idx) and is_res(end_idx): stats['f1ToRes'].append(total_time)
-        if is_res(start_idx) and is_b(end_idx): stats['resToB'].append(total_time)
-
-        if random.random() < 0.15:
-            pos_a, pos_b = idle_a_idx, idle_b_idx
-
-    return {k: (sum(v)/len(v) if v else 0) for k, v in stats.items()}
 
 # ----------------- STREAMLIT UI -----------------
-st.set_page_config(page_title="Arena Simulator Pro", layout="wide")
+st.set_page_config(page_title="Custom Arena Simulator", layout="wide")
 
-st.title("🏢 Arena Simulator Pro")
-st.caption("Virtual Apartment Elevator Strategy Simulation")
+st.title("🏢 Custom Arena Simulator")
+st.caption("사용자가 직접 건물 규모를 설정하는 엘리베이터 시뮬레이션")
 
 # Sidebar Controls
 with st.sidebar:
-    st.header("⚙️ 시뮬레이션 설정")
+    st.header("🏗️ 건물 규모 설정")
+    # 사용자가 직접 층수를 정하는 부분
+    max_f = st.number_input("최고 층 (지상)", min_value=1, max_value=100, value=30)
+    min_f = st.number_input("최저 층 (지하)", min_value=0, max_value=20, value=5)
     
-    mode_label = st.radio(
-        "시간대 선택",
-        ["출근 시간 (Morning Rush)", "퇴근 시간 (Evening Rush)", "그 외 시간 (Off-peak)"]
-    )
-    mode_map = {
-        "출근 시간 (Morning Rush)": "morning",
-        "퇴근 시간 (Evening Rush)": "evening",
-        "그 외 시간 (Off-peak)": "normal"
-    }
-    current_mode = mode_map[mode_label]
-    
+    # 설정된 층수에 따라 FLOOR_LABELS 자동 생성
+    # 지하층(B) 생성 후 지상층(F) 생성
+    FLOOR_LABELS = [f"B{i}" for i in range(min_f, 0, -1)] + [f"{i}F" for i in range(1, max_f + 1)]
+    TOTAL_FLOORS = len(FLOOR_LABELS)
+    idx_1f = min_f  # 1층의 인덱스 위치 (지하 층수만큼 뒤에 있음)
+
     st.divider()
     
+    st.header("⚙️ 시뮬레이션 설정")
+    mode_label = st.radio("시간대 선택", ["출근 시간", "퇴근 시간", "그 외 시간"])
+    mode_map = {"출근 시간": "morning", "퇴근 시간": "evening", "그 외 시간": "normal"}
+    current_mode = mode_map[mode_label]
+    
     st.subheader("대기 층 전략")
-    idle_a = st.select_slider("Elevator A 대기 층", options=FLOOR_LABELS, value='15F')
-    idle_b = st.select_slider("Elevator B 대기 층", options=FLOOR_LABELS, value='25F')
+    # 동적으로 생성된 FLOOR_LABELS를 옵션으로 사용
+    idle_a = st.select_slider("Elevator A 대기 층", options=FLOOR_LABELS, value=FLOOR_LABELS[len(FLOOR_LABELS)//2])
+    idle_b = st.select_slider("Elevator B 대기 층", options=FLOOR_LABELS, value="1F")
     
     run_btn = st.button("시뮬레이션 실행", type="primary", use_container_width=True)
 
-# Main Layout
-col1, col2, col3 = st.columns([1, 1, 1.5])
+# ----------------- CONSTANTS & HELPERS -----------------
+TARGETS = {'resTo1F': 83, 'f1ToRes': 47, 'resToB': 75}
+TIME_PER_FLOOR = 2.5
+DOOR_CYCLE = 7.0
+
+# 층 성격 판단 함수 (동적 인덱스 기준)
+def is_res(idx, f1_idx): return idx > f1_idx + 4 # 1층 위로 5개 층 이상부터 거주층으로 가정
+def is_b(idx, f1_idx): return idx < f1_idx      # 1층보다 낮으면 지하
+def is_1f(idx, f1_idx): return idx == f1_idx    # 1층
+
+# ----------------- SIMULATION ENGINE -----------------
+def run_simulation(mode, idle_a_idx, idle_b_idx, f1_idx, total_fs):
+    stats = {'resTo1F': [], 'f1ToRes': [], 'resToB': []}
+    num_trips = 1000
+    pos_a, pos_b = idle_a_idx, idle_b_idx
+
+    for _ in range(num_trips):
+        start_idx, end_idx = 0, 0
+        r = random.random()
+
+        # 모드별 이동 로직 (동적 층수 반영)
+        if mode == 'morning':
+            if r < 0.85: # 거주층 -> 1층/지하
+                start_idx = random.randint(min(f1_idx + 5, total_fs-1), total_fs - 1)
+                end_idx = random.randint(0, f1_idx)
+            else:
+                start_idx = random.randint(0, total_fs - 1)
+                end_idx = random.randint(0, total_fs - 1)
+        elif mode == 'evening':
+            if r < 0.85: # 1층/지하 -> 거주층
+                start_idx = random.randint(0, f1_idx)
+                end_idx = random.randint(min(f1_idx + 5, total_fs-1), total_fs - 1)
+            else:
+                start_idx = random.randint(0, total_fs - 1)
+                end_idx = random.randint(0, total_fs - 1)
+        else:
+            start_idx = random.randint(0, total_fs - 1)
+            end_idx = random.randint(0, total_fs - 1)
+
+        if start_idx == end_idx: continue
+
+        # 엘리베이터 배정 및 시간 계산
+        dist_a = abs(pos_a - start_idx)
+        dist_b = abs(pos_b - start_idx)
+        chosen_dist = min(dist_a, dist_b)
+        
+        if dist_a <= dist_b: pos_a = end_idx
+        else: pos_b = end_idx
+
+        travel_dist = abs(start_idx - end_idx)
+        total_time = (chosen_dist * TIME_PER_FLOOR) + DOOR_CYCLE + (travel_dist * TIME_PER_FLOOR) + DOOR_CYCLE
+        
+        # 결과 기록
+        if is_res(start_idx, f1_idx) and is_1f(end_idx, f1_idx): stats['resTo1F'].append(total_time)
+        if is_1f(start_idx, f1_idx) and is_res(end_idx, f1_idx): stats['f1ToRes'].append(total_time)
+        if is_res(start_idx, f1_idx) and is_b(end_idx, f1_idx): stats['resToB'].append(total_time)
+
+    return {k: (sum(v)/len(v) if v else 0) for k, v in stats.items()}
+
+# ----------------- MAIN LAYOUT -----------------
+col1, col2 = st.columns([1, 2])
 
 with col1:
     st.subheader("Building Status")
+    # 설정된 층수에 따라 시각화 자동 생성
     for floor in reversed(FLOOR_LABELS):
-        bg_color = "#1e293b"
-        label = floor
-        indicator = ""
-        if floor == idle_a: indicator += "🟢 (A) "
-        if floor == idle_b: indicator += "🟣 (B)"
-        
-        st.markdown(f"""<div style="background:{bg_color}; padding:2px 10px; margin:1px; border-radius:3px; font-size:10px; font-family:monospace; border-left: 4px solid {'#10b981' if indicator else '#334155'}">
-            {label} {indicator}</div>""", unsafe_allow_html=True)
+        is_idle = (floor == idle_a or floor == idle_b)
+        st.markdown(f"""<div style="background:#1e293b; padding:2px 10px; margin:1px; border-radius:3px; font-size:10px; border-left: 4px solid {'#10b981' if is_idle else '#334155'}">
+            {floor} {'🟢' if floor == idle_a else ''} {'🟣' if floor == idle_b else ''}</div>""", unsafe_allow_html=True)
 
 with col2:
-    st.subheader("시스템 제원")
-    st.info("""
-    - **규모:** 35층 (B5-30F / 210세대)
-    - **이동 속도:** 2.5초 / 층
-    - **도어 시간:** 7.0초 (열림+닫힘)
-    """)
-    st.warning("⚠️ 물리적 거리로 인해 일부 목표 시간은 달성이 어려울 수 있으며, 최적 대기 층을 찾는 것이 목적입니다.")
-
-with col3:
     st.subheader("📊 시뮬레이션 결과")
-    
     if run_btn:
-        with st.spinner('시뮬레이션 분석 중...'):
-            res = run_simulation(current_mode, FLOOR_LABELS.index(idle_a), FLOOR_LABELS.index(idle_b))
-            
-            def display_metric(label, actual, target, desc):
-                diff = actual - target
-                color = "normal" if actual <= target else "inverse"
-                st.metric(label=label, value=f"{actual:.1f}초", delta=f"{diff:.1f}초 (목표: {target}s)", delta_color=color)
-                st.caption(desc)
-                progress = min(actual / target, 1.5) / 1.5
-                st.progress(progress)
-                st.divider()
-
-            # "로직.png" 참고: 퇴근 시간일 경우 순서 변경
-            if current_mode == 'evening':
-                display_metric("1층 → 거주층 (상행)", res['f1ToRes'], TARGETS['f1ToRes'], "1층에서 주거층으로 올라가는 평균 소요 시간")
-                display_metric("거주층 → 1층 (하행)", res['resTo1F'], TARGETS['resTo1F'], "주거층에서 1층으로 이동하는 평균 소요 시간")
-                display_metric("거주층 → 지하층", res['resToB'], TARGETS['resToB'], "주거층에서 지하 주차장으로 이동하는 평균 소요 시간")
-            else:
-                display_metric("거주층 → 1층 (하행)", res['resTo1F'], TARGETS['resTo1F'], "주거층에서 1층으로 이동하는 평균 소요 시간")
-                display_metric("1층 → 거주층 (상행)", res['f1ToRes'], TARGETS['f1ToRes'], "1층에서 주거층으로 올라가는 평균 소요 시간")
-                display_metric("거주층 → 지하층", res['resToB'], TARGETS['resToB'], "주거층에서 지하 주차장으로 이동하는 평균 소요 시간")
+        res = run_simulation(current_mode, FLOOR_LABELS.index(idle_a), FLOOR_LABELS.index(idle_b), idx_1f, TOTAL_FLOORS)
+        
+        col_res1, col_res2 = st.columns(2)
+        with col_res1:
+            st.metric("상행 (1층→거주층)", f"{res['f1ToRes']:.1f}초")
+            st.metric("하행 (거주층→1층)", f"{res['resTo1F']:.1f}초")
+        with col_res2:
+            st.metric("주차장 (거주층→지하)", f"{res['resToB']:.1f}초")
+            st.info(f"설정된 총 층수: {TOTAL_FLOORS}개 층")
     else:
-        st.write("왼쪽 버튼을 눌러 시뮬레이션을 시작하세요.")
+        st.write("왼쪽에서 층수를 정한 뒤 실행 버튼을 누르세요.")
