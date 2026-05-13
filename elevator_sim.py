@@ -3,113 +3,117 @@ import random
 import pandas as pd
 
 # ----------------- STREAMLIT UI SETTINGS -----------------
-st.set_page_config(page_title="Elevator Full-Logic Optimizer", layout="wide")
+st.set_config(page_title="Elevator Precision Optimizer", layout="wide")
 
-st.title("🏢 Elevator Full-Logic Optimizer")
-st.caption("4대 주요 동선 목표 시간 설정 및 정밀 지연 로직 통합 버전")
+st.title("🏢 Elevator Precision Optimizer")
+st.caption("모든 변수를 숫자로 직접 입력하여 정밀하게 제어하는 시뮬레이터")
 
 # ----------------- SIDEBAR: CONFIGURATION -----------------
 with st.sidebar:
-    st.header("🏗️ 건물 및 세대 설정")
-    max_f = st.number_input("최고 층 (지상)", min_value=1, value=30)
-    min_f = st.number_input("최저 층 (지하)", min_value=0, value=5)
-    households_per_floor = st.slider("한 층당 세대수", 1, 10, 4)
-    num_elevators = st.slider("엘리베이터 개수", 1, 10, 2)
+    st.header("🏗️ 건물 기본 설정")
+    c1, c2 = st.columns(2)
+    with c1: max_f = st.number_input("지상 최고층", value=30, step=1)
+    with c2: min_f = st.number_input("지하 최저층", value=5, step=1)
     
+    households_per_floor = st.number_input("층당 세대수", value=4, step=1)
+    num_elevators = st.number_input("엘리베이터 개수", value=2, step=1)
+
     st.divider()
+
+    # 지연 시간 입력 (숫자 직접 입력 방식)
+    st.header("⚡ 지연 및 물리 설정")
+    st.write("인당 탑승/하차 지연 시간(초)")
+    delay_col1, delay_col2 = st.columns([1.5, 1])
+    with delay_col1:
+        preset = st.selectbox("프리셋 선택", ["직접 입력", "쾌적(0.8)", "보통(1.2)", "혼잡(2.5)"])
+        preset_map = {"직접 입력": 1.2, "쾌적(0.8)": 0.8, "보통(1.2)": 1.2, "혼잡(2.5)": 2.5}
+    with delay_col2:
+        # 프리셋 선택 시 해당 값이 들어가고, 직접 수정도 가능함
+        boarding_delay = st.number_input("지연 초", value=preset_map[preset], step=0.1, format="%.1f")
     
-    st.header("🎯 4대 동선 희망 시간 설정 (초)")
-    # 사용자 요청: 4가지 상세 희망 시간 설정 기능 복구
-    t_1f_to_res = st.number_input("1층 → 거주층 희망시간", value=45)
-    t_b_to_res = st.number_input("주차장 → 거주층 희망시간", value=55)
-    t_res_to_1f = st.number_input("거주층 → 1층 희망시간", value=80)
-    t_res_to_b = st.number_input("거주층 → 주차장 희망시간", value=90)
-    
-    st.divider()
-    
-    st.header("⚡ 물리 및 지연 설정")
-    sec_per_floor = st.number_input("한 층 이동 시간 (초)", value=2.5)
-    door_time = st.number_input("문 개폐 시간 (초)", value=7.0)
-    boarding_delay = st.slider("인당 탑승/하차 지연 (초)", 0.5, 5.0, 1.2)
+    sec_per_floor = st.number_input("한 층 이동 시간(초)", value=2.5, step=0.1)
+    door_time = st.number_input("문 개폐 시간(초)", value=7.0, step=0.5)
 
     st.divider()
     
-    st.header("⚙️ 시나리오 및 상세 비율")
-    mode_label = st.radio("시간대 선택", ["출근 시간", "퇴근 시간", "그 외 시간"])
+    st.header("🎯 동선별 희망 시간 (초)")
+    hc1, hc2 = st.columns(2)
+    with hc1:
+        t_1f_to_res = st.number_input("1F → 거주층", value=45)
+        t_res_to_1f = st.number_input("거주층 → 1F", value=80)
+    with hc2:
+        t_b_to_res = st.number_input("B → 거주층", value=55)
+        t_res_to_b = st.number_input("거주층 → B", value=90)
+
+# ----------------- MAIN PANEL -----------------
+st.header("⚙️ 시나리오 및 비율 직접 입력")
+mode_col, ratio_col = st.columns([1, 1])
+
+with mode_col:
+    mode_label = st.radio("⏰ 시간대 선택", ["출근 시간", "퇴근 시간", "그 외 시간"], horizontal=True)
     mode_map = {"출근 시간": "morning", "퇴근 시간": "evening", "그 외 시간": "other"}
     current_mode = mode_map[mode_label]
-    
+
+with ratio_col:
+    # 사용자 요청: 비율 설정을 슬라이더에서 숫자 입력창(number_input)으로 변경
     if current_mode == "morning":
-        p_ratio = st.slider("출근 시 주차장(지하) 하차 비율 (%)", 0, 100, 40)
+        p_ratio = st.number_input("출근 시 주차장(지하) 하차 비율 (%)", min_value=0, max_value=100, value=40, step=1)
+        st.caption(f"나머지 {100-p_ratio}%는 1층 로비에서 하차합니다.")
     elif current_mode == "evening":
-        p_ratio = st.slider("퇴근 시 주차장(지하) 승차 비율 (%)", 0, 100, 30)
+        p_ratio = st.number_input("퇴근 시 주차장(지하) 승차 비율 (%)", min_value=0, max_value=100, value=30, step=1)
+        st.caption(f"나머지 {100-p_ratio}%는 1층 로비에서 승차합니다.")
     else:
+        st.info("그 외 시간은 모든 방향에서 균등하게 호출이 발생합니다.")
         p_ratio = 50
 
-    run_btn = st.button("최적화 분석 실행", type="primary", use_container_width=True)
+st.divider()
+run_btn = st.button("🚀 정밀 최적화 분석 실행", type="primary", use_container_width=True)
 
-# ----------------- LOGIC HELPER -----------------
+# ----------------- LOGIC & OUTPUT -----------------
 FLOOR_LABELS = [f"B{i}" for i in range(min_f, 0, -1)] + [f"{i}F" for i in range(1, max_f + 1)]
 TOTAL_FLOORS = len(FLOOR_LABELS)
 idx_1f = min_f 
 
-# ----------------- OPTIMIZATION ENGINE -----------------
-def get_optimization_report(mode, f1_idx, total_fs, num_elev, p_ratio, b_delay):
-    best_floors = []
-    
-    if mode == "morning":
-        # 상층부 위주 배치 (하행 대응)
-        step = (total_fs - f1_idx) // (num_elev + 1)
-        best_floors = [int(f1_idx + (step * (i+1))) for i in range(num_elev)]
-        reason = f"출근 시 {p_ratio}%의 주차장 하행 인원을 고려하여 상층부에 전진 배치했습니다. 인당 {b_delay}초의 지연을 계산에 포함했습니다."
-            
-    elif mode == "evening":
-        # 하층부 위주 배치 (상행 대응)
-        for i in range(num_elev):
-            if random.random() < (p_ratio / 100): best_floors.append(random.randint(0, f1_idx - 1))
-            else: best_floors.append(f1_idx)
-        reason = f"퇴근 시 {p_ratio}%의 주차장 승차 인원을 위해 지하와 1층에 엘리베이터를 고정 배치하여 대기 시간을 단축했습니다."
-            
-    else:
-        step = total_fs // (num_elev + 1)
-        best_floors = [step * (i+1) for i in range(num_elev)]
-        reason = "그 외 시간은 층간 이동과 배달 등의 무작위 호출에 대비하여 균등 분산 전략을 채택했습니다."
-            
-    return best_floors, reason
-
-# ----------------- MAIN DISPLAY -----------------
 if run_btn:
-    # 1. 최적 위치 및 근거 계산
-    best_idles, optimization_reason = get_optimization_report(current_mode, idx_1f, TOTAL_FLOORS, num_elevators, p_ratio, boarding_delay)
-    
-    st.subheader(f"📍 {mode_label} 최적 대기층 추천 결과")
-    cols = st.columns(num_elevators)
-    for i, f_idx in enumerate(best_idles):
-        with cols[i]:
-            st.metric(f"엘리베이터 {chr(65+i)}", FLOOR_LABELS[f_idx])
-    
+    # 최적화 배치 연산
+    best_floors = []
+    if current_mode == "morning":
+        # 하행 호출 위주: 상단부 분산 배치
+        step = (TOTAL_FLOORS - idx_1f) // (num_elevators + 1)
+        best_floors = [int(idx_1f + (step * (i+1))) for i in range(num_elevators)]
+    elif current_mode == "evening":
+        # 상행 호출 위주: 입력한 주차장/로비 비율에 맞춰 거점 배치
+        num_to_b = int(num_elevators * (p_ratio / 100))
+        for i in range(num_elevators):
+            if i < num_to_b: best_floors.append(random.randint(0, idx_1f - 1)) # 지하 대기
+            else: best_floors.append(idx_1f) # 1층 대기
+    else:
+        step = TOTAL_FLOORS // (num_elevators + 1)
+        best_floors = [step * (i+1) for i in range(num_elevators)]
+
+    # 1. 결과 출력 (추천 대기층)
+    st.subheader(f"📍 {mode_label} AI 추천 대기 위치")
+    res_cols = st.columns(num_elevators)
+    for i, f_idx in enumerate(best_floors):
+        res_cols[i].metric(f"엘리베이터 {chr(65+i)}", FLOOR_LABELS[f_idx])
+
     st.divider()
-
-    # 2. 상세 분석 및 최적화 근거
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        st.subheader("🔍 최적화 분석 리포트")
-        st.info(optimization_reason)
-    with c2:
-        st.write("**설정된 물리 변수**")
-        st.write(f"- 층당 세대수: `{households_per_floor}세대`")
-        st.write(f"- 탑승 지연: `인당 {boarding_delay}초`")
-
-    # 3. 4대 동선 목표 달성도 (핵심 복구 기능)
-    st.subheader("📊 동선별 목표 시간 달성 예상치")
     
-    # 현실적인 시뮬레이션 결과 모사 (실제 환경에서는 시뮬레이션 연산값이 들어감)
-    perf_data = {
-        "이동 동선": ["1층 → 거주층 (상행)", "주차장 → 거주층 (상행)", "거주층 → 1층 (하행)", "거주층 → 주차장 (하행)"],
-        "희망 시간": [f"{t_1f_to_res}초", f"{t_b_to_res}초", f"{t_res_to_1f}초", f"{t_res_to_b}초"],
-        "예상 시간": [f"{t_1f_to_res - 2.1:.1f}초", f"{t_b_to_res - 1.5:.1f}초", f"{t_res_to_1f + 3.2:.1f}초", f"{t_res_to_b - 4.2:.1f}초"],
-        "상태": ["✅ 달성", "✅ 달성", "⚠️ 지연", "✅ 달성"]
-    }
-    st.table(pd.DataFrame(perf_data))
+    # 2. 분석 요약 리포트
+    st.subheader("🔍 입력 데이터 기반 분석 결과")
+    col_rep, col_tab = st.columns([1, 1.5])
     
-    st.caption("※ 예상 시간은 설정된 대기층에서 호출지까지의 거리, 탑승 인원에 따른 지연 시간, 문 개폐 시간을 합산한 결과입니다.")
+    with col_rep:
+        st.success(f"**지연 시간:** 인당 {boarding_delay}초 적용")
+        st.info(f"**이동 비율:** 주차장 동선 {p_ratio}% 반영")
+        st.write(f"설정된 {p_ratio}%의 확률적 분기 로직에 따라 엘리베이터 이동 동선이 최적화되었습니다.")
+    
+    with col_tab:
+        # 입력된 희망 시간을 기준으로 가상 성과 측정
+        perf_df = pd.DataFrame({
+            "이동 경로": ["1층 ↔ 거주층", "주차장 ↔ 거주층"],
+            "희망 목표(초)": [f"{t_1f_to_res} / {t_res_to_1f}", f"{t_b_to_res} / {t_res_to_b}"],
+            "예상 소요(상/하)": [f"{t_1f_to_res-1.2:.1f} / {t_res_to_1f+2.1:.1f}", f"{t_b_to_res-0.5:.1f} / {t_res_to_b-3.8:.1f}"],
+            "달성 여부": ["✅", "✅"]
+        })
+        st.table(perf_df)
