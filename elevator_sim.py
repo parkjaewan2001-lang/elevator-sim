@@ -7,7 +7,7 @@ import random
 st.set_page_config(page_title="Elevator Experiment Lab", layout="wide")
 
 st.title("🏢 Elevator Experiment Lab")
-st.caption("전략적 배치 vs 무작위 분산(로직 없음) 상태의 현실적인 성능 차이를 분석합니다.")
+st.caption("노선별 최대 대기 시간 임계치를 설정하여 배치 로직의 안정성을 진단합니다.")
 
 # ----------------- SIDEBAR: CONFIGURATION -----------------
 with st.sidebar:
@@ -27,6 +27,15 @@ with st.sidebar:
     accel_delay = st.number_input("가속/감속 추가 지연(초)", value=1.5)
     door_time = st.number_input("문 개폐 시간(초)", value=7.0)
 
+    st.divider()
+    
+    # [부활] 노선별 최대 대기 시간 설정
+    st.header("⚠️ 최대 허용 대기 시간 설정 (초)")
+    limit_1f_up = st.slider("1F → 거주층 최대치", 30, 120, 45)
+    limit_1f_down = st.slider("거주층 → 1F 최대치", 30, 180, 80)
+    limit_b_up = st.slider("지하 → 거주층 최대치", 30, 150, 60)
+    limit_b_down = st.slider("거주층 → 지하 최대치", 30, 180, 90)
+
 # ----------------- MAIN PANEL: SCENARIO SETTINGS -----------------
 st.header("⚙️ 시뮬레이션 시나리오 및 배치")
 
@@ -43,27 +52,20 @@ with c_p2: p_down_ratio = st.slider("지하로 내려가는 비율 (%)", 0, 100,
 
 st.divider()
 
-placement_mode = st.radio(
-    "📍 배치 방식 선택", 
-    ["AI 자동 최적화 분석 (코드 기반)", "사용자 수동 배치 시뮬레이션"], 
-    horizontal=True
-)
+placement_mode = st.radio("📍 배치 방식 선택", ["AI 자동 최적화 분석", "사용자 수동 배치"], horizontal=True)
 
 FLOOR_LABELS = [f"B{i}" for i in range(min_f, 0, -1)] + [f"{i}F" for i in range(1, max_f + 1)]
 idx_1f = min_f
 total_fs = len(FLOOR_LABELS)
 
-# 배치 결정 로직
 final_placements = []
-if placement_mode == "사용자 수동 배치 시뮬레이션":
-    st.info("각 엘리베이터의 대기 위치를 직접 지정하세요.")
+if placement_mode == "사용자 수동 배치":
     m_cols = st.columns(num_elevators)
     for i in range(num_elevators):
         with m_cols[i]:
             val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f)
             final_placements.append(val)
 else:
-    # AI 최적화 알고리즘
     if mode_label == "출근 시간":
         final_placements = [int(np.percentile(range(idx_1f+stairs_floor, total_fs), (100/(num_elevators+1))*(i+1))) for i in range(num_elevators)]
     elif mode_label == "퇴근 시간":
@@ -72,90 +74,70 @@ else:
     else:
         final_placements = [int(f) for f in np.linspace(0, total_fs-1, num_elevators)]
     
-    st.success(f"🤖 AI 최적화 로직 적용됨")
     cols = st.columns(num_elevators)
     for i, p in enumerate(final_placements):
         cols[i].metric(f"EL {chr(65+i)} 배치", FLOOR_LABELS[p])
 
-run_btn = st.button("🚀 무작위 분산 대조 분석 실행", type="primary", use_container_width=True)
+run_btn = st.button("🚀 성능 및 한계치 분석 실행", type="primary", use_container_width=True)
 
 # ----------------- LOGIC: ENGINE -----------------
 
 def calculate_time(start_idx, end_idx, placements):
-    # 가장 가까운 엘리베이터와의 거리 계산
     min_dist = min([abs(f_idx - start_idx) for f_idx in placements])
     wait_t = (min_dist * sec_per_floor) + accel_delay
     move_t = (abs(start_idx - end_idx) * sec_per_floor) + accel_delay
-    
     household_weight = 1 + (households_per_floor * 0.03)
     total = (wait_t + move_t + (door_time * 2) + (1.2 * 4)) * household_weight
     if delivery_mode: total *= 1.3
     return total
 
 if run_btn:
-    # [핵심 변경] 비최적화 대조군: 1층 고정이 아닌 무작위 층 분산 (10회 시뮬레이션 평균값 사용)
-    def get_random_average_time(start, end, n_el):
-        trials = 10
-        total_trial_time = 0
-        for _ in range(trials):
-            random_pos = [random.randint(0, total_fs - 1) for _ in range(n_el)]
-            total_trial_time += calculate_time(start, end, random_pos)
-        return total_trial_time / trials
+    # 무작위 분산 대조군 계산용 함수
+    def get_random_avg(start, end, n):
+        return sum([calculate_time(start, end, [random.randint(0, total_fs-1) for _ in range(n)]) for _ in range(10)]) / 10
 
     avg_res_f = idx_1f + stairs_floor + ((max_f - stairs_floor) * 0.6)
     nodes = {
-        "1F ⬆️ 거주층": (idx_1f, avg_res_f),
-        "거주층 ⬇️ 1F": (avg_res_f, idx_1f),
-        "지하 ⬆️ 거주층": (0, avg_res_f),
-        "거주층 ⬇️ 지하": (avg_res_f, 0)
+        "1F ⬆️ 거주층": (idx_1f, avg_res_f, limit_1f_up),
+        "거주층 ⬇️ 1F": (avg_res_f, idx_1f, limit_1f_down),
+        "지하 ⬆️ 거주층": (0, avg_res_f, limit_b_up),
+        "거주층 ⬇️ 지하": (avg_res_f, 0, limit_b_down)
     }
 
-    st.subheader("📊 전략 배치 vs 무작위 분산(무전략) 비교")
-    
+    st.subheader("📊 성능 및 임계치 통과 여부")
+    m_cols = st.columns(4)
     report_list = []
     chart_data = []
 
-    for name, (start, end) in nodes.items():
-        # 1. 현재 전략 시간
+    for i, (name, (start, end, limit)) in enumerate(nodes.items()):
         strategy_time = calculate_time(start, end, final_placements)
-        # 2. 무작위 분산 평균 시간
-        random_time = get_random_average_time(start, end, num_elevators)
+        random_time = get_random_avg(start, end, num_elevators)
         
-        diff = strategy_time - random_time
-        improvement = ((random_time - strategy_time) / random_time) * 100
+        # 임계치 초과 여부 확인
+        is_exceeded = strategy_time > limit
+        status_color = "normal" if not is_exceeded else "inverse"
+        status_msg = "✅ 통과" if not is_exceeded else f"🚨 초과 (+{strategy_time - limit:.1f}초)"
+
+        with m_cols[i]:
+            st.metric(name, f"{strategy_time:.1f}초", f"한계: {limit}초", delta_color=status_color)
+            st.caption(status_msg)
         
         report_list.append({
             "노선": name,
-            "전략 적용": f"{strategy_time:.1f}초",
-            "무작위 분산(기본)": f"{random_time:.1f}초",
-            "차이": f"{diff:+.1f}초",
-            "효율 개선": f"{improvement:.1f}%"
+            "현재 전략": f"{strategy_time:.1f}초",
+            "최대 허용치": f"{limit}초",
+            "결과": status_msg,
+            "무작위 분산 대비": f"{strategy_time - random_time:+.1f}초"
         })
-        
-        chart_data.append({
-            "노선": name,
-            "현재 전략": strategy_time,
-            "무작위 분산(무전략)": random_time
-        })
-
-    # 상단 메트릭
-    m_cols = st.columns(4)
-    for i, item in enumerate(report_list):
-        m_cols[i].metric(item["노선"], item["전략 적용"], item["차이"], delta_color="inverse")
+        chart_data.append({"노선": name, "현재 전략": strategy_time, "최대 허용치": limit, "무작위 분산": random_time})
 
     st.divider()
 
-    # 비교 그래프
-    st.write("#### 📈 전략 배치 vs 무작위 분산 비교 그래프")
+    # 시각화 그래프
+    st.write("#### 📈 전략 성능 vs 최대 허용 임계치 비교")
     df_chart = pd.DataFrame(chart_data).set_index("노선")
     st.bar_chart(df_chart)
-    st.caption("무작위로 흩어져 있는 엘리베이터(무전략) 대비 현재 배치 전략의 우수성을 보여줍니다.")
+    st.info("💡 **팁:** '현재 전략' 막대가 '최대 허용치' 선보다 낮게 유지되도록 배치를 조정하는 것이 목표입니다.")
 
-    # 상세 데이터 테이블
-    st.write("#### 📋 상세 분석 결과 데이터")
-    st.table(pd.DataFrame(report_data := report_list))
-
-    with st.expander("💡 분석 로직 안내"):
-        st.write("- **무작위 분산(기본):** 엘리베이터가 모든 층에 불규칙하게 흩어져 있는 상태를 가정하여 10회 반복 측정 후 평균값을 산출했습니다.")
-        st.write("- **전략 적용:** AI가 계산한 최적 위치 또는 사용자가 직접 지정한 위치에 대기할 때의 시간입니다.")
-        st.write("- **현실성 강화:** 단순히 1층에 모여 있는 것보다 실제 운행 중인 엘리베이터의 불확실성을 더 잘 반영합니다.")
+    st.write("#### 📋 상세 분석 데이터")
+    st.table(pd.DataFrame(report_list))
