@@ -1,12 +1,13 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import random
 
 # ----------------- STREAMLIT UI SETTINGS -----------------
 st.set_page_config(page_title="Elevator Experiment Lab", layout="wide")
 
 st.title("🏢 Elevator Experiment Lab")
-st.caption("시간대별 패턴, 지하 주차장 비중, 그리고 AI 최적화의 효과를 정밀 분석합니다.")
+st.caption("사용자 정의 배치와 비최적화(기본) 상태의 성능 차이를 정밀 분석합니다.")
 
 # ----------------- SIDEBAR: CONFIGURATION -----------------
 with st.sidebar:
@@ -37,22 +38,15 @@ with st.sidebar:
 # ----------------- MAIN PANEL: SCENARIO SETTINGS -----------------
 st.header("⚙️ 시뮬레이션 시나리오")
 
-# 1. 시간대 설정 (부활)
-mode_label = st.radio(
-    "⏰ 분석 시간대 선택", 
-    ["출근 시간", "퇴근 시간", "낮 시간", "새벽 시간"], 
-    horizontal=True
-)
-mode_map = {"출근 시간": "morning", "퇴근 시간": "evening", "낮 시간": "daytime", "새벽 시간": "night"}
-current_mode = mode_map[mode_label]
+# 1. 시간대 설정
+mode_label = st.radio("⏰ 분석 시간대", ["출근 시간", "퇴근 시간", "낮 시간", "새벽 시간"], horizontal=True)
+current_mode = mode_label
 
-# 2. 주차장 이용 비율 설정 (부활)
+# 2. 주차장 이용 비율 설정
 st.subheader("🚗 주차장(지하) 이용 비중 설정")
 c_p1, c_p2 = st.columns(2)
-with c_p1:
-    p_up_ratio = st.slider("지하에서 올라가는 비율 (%)", 0, 100, 30, help="지하 주차장에서 탑승하여 거주층으로 가는 승객 비율")
-with c_p2:
-    p_down_ratio = st.slider("지하로 내려가는 비율 (%)", 0, 100, 40, help="거주층에서 탑승하여 지하 주차장으로 가는 승객 비율")
+with c_p1: p_up_ratio = st.slider("지하에서 올라가는 비율 (%)", 0, 100, 30)
+with c_p2: p_down_ratio = st.slider("지하로 내려가는 비율 (%)", 0, 100, 40)
 
 # 3. 기타 변수
 col_cfg1, col_cfg2 = st.columns(2)
@@ -68,62 +62,54 @@ household_weight = 1 + (households_per_floor * 0.03)
 
 st.divider()
 
-# 4. 배치 로직 선택
-placement_method = st.radio("📍 로직 선택", ["자율주행 최적화 (AI 추천)", "기본 고정 배치 (전원 1F 대기)"], horizontal=True)
-
-# 층 정보 정의
+# 4. 사용자 직접 배치 설정
+st.subheader("📍 엘리베이터 수동 배치 (사용자 정의)")
 FLOOR_LABELS = [f"B{i}" for i in range(min_f, 0, -1)] + [f"{i}F" for i in range(1, max_f + 1)]
 idx_1f = min_f
 total_fs = len(FLOOR_LABELS)
 
-run_btn = st.button("🚀 통합 성능 분석 실행", type="primary", use_container_width=True)
+user_placements = []
+m_cols = st.columns(num_elevators)
+for i in range(num_elevators):
+    with m_cols[i]:
+        val = st.selectbox(f"EL {chr(65+i)} 위치", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f)
+        user_placements.append(val)
+
+run_btn = st.button("🚀 사용자 배치 vs 비최적화 비교 분석", type="primary", use_container_width=True)
 
 # ----------------- LOGIC: ENGINE -----------------
 
-def get_wait_dist(start_idx, placements, is_optimized):
-    """대수 증가에 따른 대기 시간 감소 로직"""
-    if is_optimized:
-        return min([abs(f_idx - start_idx) for f_idx in placements])
-    else:
-        # 비최적화(1층 고정) 시에도 대수가 많으면 확률적으로 15%씩 응답 효율 상승
-        base_dist = abs(placements[0] - start_idx)
+def get_wait_dist(start_idx, placements, is_basic_fixed):
+    """
+    is_basic_fixed=True일 경우: 모든 EL이 1층에 고정된 비최적화 상태
+    is_basic_fixed=False일 경우: 사용자가 배치한 위치 기준
+    """
+    if is_basic_fixed:
+        # 비최적화(1층 고정) 시에도 대수가 많으면 확률적으로 응답 효율 상승 (군집 효과)
+        base_dist = abs(idx_1f - start_idx)
         efficiency = max(0.4, (1 - (0.15 * (len(placements) - 1))))
         return base_dist * efficiency
+    else:
+        # 사용자 배치 위치 중 가장 가까운 거리 계산
+        return min([abs(f_idx - start_idx) for f_idx in placements])
 
-def calculate_time(start_idx, end_idx, placements, is_optimized):
-    # 가속도를 고려한 대기 및 이동 시간
-    d_call = get_wait_dist(start_idx, placements, is_optimized)
+def calculate_time(start_idx, end_idx, placements, is_basic_fixed):
+    d_call = get_wait_dist(start_idx, placements, is_basic_fixed)
     wait_t = (d_call * sec_per_floor) + accel_delay
     
     d_move = abs(start_idx - end_idx)
     move_t = (d_move * sec_per_floor) + accel_delay
     
-    # 최종 시간 (혼잡도, 세대수, 택배 반영)
     total = (wait_t + move_t + (door_time * 2) + (1.2 * 4 * adj_delay)) * household_weight
     if delivery_mode: total *= 1.3
     return total
 
 if run_btn:
-    # 1. AI 최적화 배치 시나리오
-    if current_mode == "morning": # 출근: 거주층 분산 배치
-        opt_placements = [int(np.percentile(range(idx_1f+stairs_floor, total_fs), (100/(num_elevators+1))*(i+1))) for i in range(num_elevators)]
-    elif current_mode == "evening": # 퇴근: 1F 및 지하 주차장 비중에 따라 분산
-        num_b = int(num_elevators * (max(p_up_ratio, p_down_ratio) / 100))
-        opt_placements = [random.randint(0, idx_1f-1) for _ in range(num_b)] + [idx_1f] * (num_elevators - num_b)
-    else: # 평시: 전체 균등 분산
-        opt_placements = [int(f) for f in np.linspace(0, total_fs-1, num_elevators)]
-    
-    # 2. 기본 고정 배치 (대조군)
+    # 대조군 설정 (비최적화: 전원 1층 대기)
     basic_placements = [idx_1f] * num_elevators
     
-    # 현재 선택된 모드 적용
-    is_ai = "AI" in placement_method
-    current_placements = opt_placements if is_ai else basic_placements
-    compare_placements = basic_placements if is_ai else opt_placements
-
-    # 3. 성능 분석 (4대 주요 노선)
+    # 성능 분석 노선
     avg_res_f = idx_1f + stairs_floor + ((max_f - stairs_floor) * 0.6)
-    
     nodes = {
         "1F ⬆️ 거주층": (idx_1f, avg_res_f, t_1f_up),
         "거주층 ⬇️ 1F": (avg_res_f, idx_1f, t_1f_down),
@@ -131,48 +117,49 @@ if run_btn:
         "거주층 ⬇️ 지하": (avg_res_f, 0, t_b_down)
     }
 
-    # 리포트 생성
-    st.subheader(f"📊 분석 결과 (시간대: {mode_label} / 방식: {placement_method})")
+    # 리포트 출력
+    st.subheader(f"📊 분석 결과 리포트")
     
-    # 메트릭 표시
     m_cols = st.columns(4)
     report_data = []
     
     for i, (name, (start, end, target)) in enumerate(nodes.items()):
-        cur_time = calculate_time(start, end, current_placements, is_ai)
-        alt_time = calculate_time(start, end, compare_placements, not is_ai)
-        diff = cur_time - alt_time
+        # 사용자 배치 시간
+        user_time = calculate_time(start, end, user_placements, False)
+        # 비최적화(기본) 시간
+        basic_time = calculate_time(start, end, basic_placements, True)
+        
+        diff_from_basic = user_time - basic_time
         
         with m_cols[i]:
-            st.metric(name, f"{cur_time:.1f}초", f"{diff:+.1f}초", delta_color="inverse")
+            st.metric(name, f"{user_time:.1f}초", f"{diff_from_basic:+.1f}초 (기본대비)", delta_color="inverse")
         
-        status = f"✅ {abs(cur_time - target):.1f}초 단축" if cur_time <= target else f"⚠️ {cur_time - target:.1f}초 초과"
-        report_data.append({"노선": name, "목표": f"{target}초", "예상": f"{cur_time:.1f}초", "상태": status})
+        status = f"✅ {abs(user_time - target):.1f}초 단축" if user_time <= target else f"⚠️ {user_time - target:.1f}초 초과"
+        report_data.append({
+            "노선": name, 
+            "목표": f"{target}초", 
+            "사용자 배치": f"{user_time:.1f}초", 
+            "비최적화(기본)": f"{basic_time:.1f}초",
+            "비교 결과": status
+        })
 
-    # 상세 정보
     st.divider()
-    c_left, c_right = st.columns([1, 2])
+    c_l, c_r = st.columns([1, 2])
     
-    with c_left:
-        st.write("#### 📍 엘리베이터 대기 위치")
-        for j, p in enumerate(current_placements):
+    with c_l:
+        st.write("#### 📍 설정된 대기 층수")
+        for j, p in enumerate(user_placements):
             st.write(f"**EL {chr(65+j)}**: {FLOOR_LABELS[p]}")
         
-        st.info(f"💡 **분석 요약:** {'AI 최적화' if is_ai else '기본 배치'}가 적용되어 있으며, {'비최적화' if is_ai else 'AI 최적화'} 대비 변화량이 표시됩니다.")
+        st.info("💡 **비교 안내:** 상단의 델타(+) 수치는 모든 엘리베이터가 1층에 대기하는 '비최적화' 상태 대비 사용자 배치의 효율을 나타냅니다.")
 
-    with c_right:
-        st.write("#### 📋 상세 분석 데이터")
+    with c_r:
+        st.write("#### 📋 노선별 상세 비교 데이터")
         st.table(pd.DataFrame(report_data))
 
-    # 차트 (대수별 효율)
-    st.write("#### 📈 엘리베이터 대수 증가에 따른 하행(거주층→1F) 성능 변화")
-    chart_list = []
-    for n in range(1, 11):
-        test_bas = [idx_1f] * n
-        test_opt = [int(f) for f in np.linspace(0, total_fs-1, n)]
-        chart_list.append({
-            "대수": n, 
-            "기본 고정 배치": calculate_time(avg_res_f, idx_1f, test_bas, False),
-            "AI 자율주행": calculate_time(avg_res_f, idx_1f, test_opt, True)
-        })
-    st.line_chart(pd.DataFrame(chart_list).set_index("대수"))
+    # 차트: 사용자 배치의 효율성 시각화
+    st.write("#### 📈 사용자 배치 vs 비최적화 성능 비교 (전 노선)")
+    chart_df = pd.DataFrame(report_data)
+    chart_df["사용자"] = chart_df["사용자 배치"].str.replace("초", "").astype(float)
+    chart_df["기본(비최적화)"] = chart_df["비최적화(기본)"].str.replace("초", "").astype(float)
+    st.bar_chart(chart_df.set_index("노선")[["사용자", "기본(비최적화)"]])
