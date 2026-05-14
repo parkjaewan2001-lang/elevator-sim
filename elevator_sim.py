@@ -3,10 +3,10 @@ import random
 import pandas as pd
 
 # ----------------- STREAMLIT UI SETTINGS -----------------
-st.set_page_config(page_title="Ultimate Elevator Optimizer", layout="wide")
+st.set_page_config(page_title="Elevator Experiment Lab", layout="wide")
 
-st.title("🏢 Ultimate Elevator Optimizer")
-st.caption("시간대별 정밀 분석 및 물리적 지연 수치를 반영한 현실적 시뮬레이터")
+st.title("🏢 Elevator Experiment Lab")
+st.caption("AI 자동 최적화 배치와 사용자의 수동 배치를 자유롭게 실험하고 비교하세요.")
 
 # ----------------- SIDEBAR: CONFIGURATION -----------------
 with st.sidebar:
@@ -16,7 +16,7 @@ with st.sidebar:
     with c2: min_f = st.number_input("지하 최저층", value=5, step=1)
     
     households_per_floor = st.number_input("층당 세대수", value=4, step=1)
-    num_elevators = st.number_input("엘리베이터 개수", value=2, step=1)
+    num_elevators = st.number_input("엘리베이터 개수", value=2, min_value=1, max_value=10, step=1)
 
     st.divider()
 
@@ -43,100 +43,115 @@ with st.sidebar:
         t_b_to_res = st.number_input("B → 거주층", value=55)
         t_res_to_b = st.number_input("거주층 → B", value=90)
 
-# ----------------- MAIN PANEL: SCENARIO -----------------
-st.header("⚙️ 시나리오 및 비율 상세 설정")
-mode_col, ratio_col = st.columns([1, 1])
+# ----------------- MAIN PANEL: SCENARIO & PLACEMENT -----------------
+st.header("⚙️ 시뮬레이션 설정")
+mode_col, placement_col = st.columns([1, 1])
 
 with mode_col:
-    # 시간대 세분화: 낮 시간과 새벽 시간 추가
     mode_label = st.radio(
         "⏰ 분석 시간대 선택", 
         ["출근 시간", "퇴근 시간", "낮 시간 (배달/방문)", "새벽 시간 (정적)"], 
         horizontal=True
     )
-    mode_map = {
-        "출근 시간": "morning", 
-        "퇴근 시간": "evening", 
-        "낮 시간 (배달/방문)": "daytime", 
-        "새벽 시간 (정적)": "night"
-    }
+    mode_map = {"출근 시간": "morning", "퇴근 시간": "evening", "낮 시간 (배달/방문)": "daytime", "새벽 시간 (정적)": "night"}
     current_mode = mode_map[mode_label]
 
-with ratio_col:
-    if current_mode == "morning":
-        p_ratio = st.number_input("출근 시 주차장(지하) 하차 비율 (%)", min_value=0, max_value=100, value=40)
-    elif current_mode == "evening":
-        p_ratio = st.number_input("퇴근 시 주차장(지하) 승차 비율 (%)", min_value=0, max_value=100, value=30)
-    elif current_mode == "daytime":
-        p_ratio = st.number_input("배달/택배 지하 주차장 이용 비율 (%)", min_value=0, max_value=100, value=20)
-    else:
-        st.write("새벽 시간은 호출 빈도가 매우 낮으며 주차장 이동이 드뭅니다.")
-        p_ratio = 10
+with placement_col:
+    placement_method = st.radio("📍 배치 방식 선택", ["AI 자동 최적화 추천", "사용자 수동 배치"], horizontal=True)
 
+# 층 레이블 생성
+FLOOR_LABELS = [f"B{i}" for i in range(min_f, 0, -1)] + [f"{i}F" for i in range(1, max_f + 1)]
+idx_1f = min_f
+total_fs = len(FLOOR_LABELS)
+
+# [신규] 수동 배치 입력창
+manual_floors = []
+if placement_method == "사용자 수동 배치":
+    st.info("각 엘리베이터가 대기할 층을 직접 입력하세요.")
+    m_cols = st.columns(num_elevators)
+    for i in range(num_elevators):
+        with m_cols[i]:
+            val = st.selectbox(f"엘리베이터 {chr(65+i)} 대기층", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f)
+            manual_floors.append(val)
+
+# 세부 비율 설정 (숫자 입력 유지)
 st.divider()
-run_btn = st.button("🚀 최적 배치 및 현실적 지연 분석 실행", type="primary", use_container_width=True)
+st.subheader("📊 세부 동선 비율 설정 (%)")
+r_c1, r_c2 = st.columns(2)
+with r_c1:
+    if current_mode == "morning":
+        p_ratio = st.number_input("출근 시 주차장(지하) 하차 비율", value=40)
+    elif current_mode == "evening":
+        p_ratio = st.number_input("퇴근 시 주차장(지하) 승차 비율", value=30)
+    elif current_mode == "daytime":
+        p_ratio = st.number_input("낮 시간 주차장 이용 비율", value=20)
+    else:
+        p_ratio = 10
+with r_c2:
+    st.write("") # 간격 맞춤
+    st.caption(f"나머지 {100-p_ratio}%는 1층 로비(메인 입구) 동선으로 계산됩니다.")
+
+run_btn = st.button("🚀 시뮬레이션 및 성능 분석 실행", type="primary", use_container_width=True)
 
 # ----------------- LOGIC: CALCULATION -----------------
 if run_btn:
-    FLOOR_LABELS = [f"B{i}" for i in range(min_f, 0, -1)] + [f"{i}F" for i in range(1, max_f + 1)]
-    idx_1f = min_f
-    total_fs = len(FLOOR_LABELS)
-    
-    # 1. 최적 대기층 계산 로직
+    # 1. 배치 결정
     best_floors = []
-    reason = ""
-    
-    if current_mode == "morning":
-        step = (total_fs - idx_1f) // (num_elevators + 1)
-        best_floors = [int(idx_1f + (step * (i+1))) for i in range(num_elevators)]
-        reason = "상층부 거주민의 하행 호출이 집중되므로 엘리베이터를 상층 구역에 분산 배치했습니다."
-    elif current_mode == "evening":
-        num_to_b = int(num_elevators * (p_ratio / 100))
-        for i in range(num_elevators):
-            best_floors.append(random.randint(0, idx_1f - 1) if i < num_to_b else idx_1f)
-        reason = f"로비와 지하({p_ratio}%) 승차 인원을 위해 하층부에 집중 배치했습니다."
-    elif current_mode == "daytime":
-        # 낮 시간: 1층(배달)과 중간층(가정 방문)에 적절히 분산
-        best_floors = [idx_1f] + [int(total_fs * 0.6)] * (num_elevators - 1)
-        reason = "배달원 유입이 많은 1층과 가사 방문객을 위한 중간층에 혼합 배치했습니다."
+    if placement_method == "AI 자동 최적화 추천":
+        if current_mode == "morning":
+            step = (total_fs - idx_1f) // (num_elevators + 1)
+            best_floors = [int(idx_1f + (step * (i+1))) for i in range(num_elevators)]
+        elif current_mode == "evening":
+            num_to_b = int(num_elevators * (p_ratio / 100))
+            for i in range(num_elevators):
+                best_floors.append(random.randint(0, idx_1f - 1) if i < num_to_b else idx_1f)
+        elif current_mode == "daytime":
+            best_floors = [idx_1f] + [int(total_fs * 0.6)] * (num_elevators - 1)
+        else:
+            best_floors = [idx_1f] * num_elevators
     else:
-        # 새벽 시간: 에너지 절약 및 1층 복귀 위주
-        best_floors = [idx_1f] * num_elevators
-        reason = "호출이 드문 시간대이므로 모든 엘리베이터를 1층(메인 로비)에 대기시킵니다."
+        best_floors = manual_floors
 
-    # 2. 물리적 예상 시간 계산
-    avg_high_f = idx_1f + (max_f * 0.7) # 주로 거주하는 층 (70% 높이 가정)
-    
-    def get_real_time(s, e):
-        # (이동 시간) + (문 개폐 * 2) + (지연 * 탑승객2명 가중치)
-        return (abs(s - e) * sec_per_floor) + (door_time * 2) + (boarding_delay * 4)
-
-    est_times = {
-        "1층 → 거주층": get_real_time(idx_1f, avg_high_f),
-        "주차장 → 거주층": get_real_time(0, avg_high_f),
-        "거주층 → 1층": get_real_time(avg_high_f, idx_1f),
-        "거주층 → 주차장": get_real_time(avg_high_f, 0)
-    }
-    targets = [t_1f_to_res, t_b_to_res, t_res_to_1f, t_res_to_b]
-
-    # 3. 결과 대시보드 출력
-    st.subheader(f"📍 {mode_label} AI 최적 대기 위치")
+    # 2. 결과 출력 (대기 위치)
+    st.subheader(f"📍 적용된 대기 위치 ({placement_method})")
     cols = st.columns(num_elevators)
     for i, f_idx in enumerate(best_floors):
         cols[i].metric(f"엘리베이터 {chr(65+i)}", FLOOR_LABELS[f_idx])
-    
+
     st.divider()
 
-    st.subheader("🔍 성능 분석 결과 (목표 대비 현실)")
+    # 3. 물리적 예상 시간 계산 (가장 가까운 엘리베이터의 응답 시간 반영)
+    avg_high_f = idx_1f + (max_f * 0.7) 
     
+    def get_realistic_response(target_start_idx, target_end_idx, current_placements):
+        # 호출지까지 가장 가까운 엘리베이터가 이동하는 시간 계산
+        dist_to_call = min([abs(f_idx - target_start_idx) for f_idx in current_placements])
+        travel_dist = abs(target_start_idx - target_end_idx)
+        
+        # 총 시간 = (대기지->호출지 이동) + (호출지->목적지 이동) + 문개폐*2 + 지연*4
+        total_time = ((dist_to_call + travel_dist) * sec_per_floor) + (door_time * 2) + (boarding_delay * 4)
+        return total_time
+
+    est_times = {
+        "1층 → 거주층": get_realistic_response(idx_1f, avg_high_f, best_floors),
+        "주차장 → 거주층": get_realistic_response(0, avg_high_f, best_floors),
+        "거주층 → 1층": get_realistic_response(avg_high_f, idx_1f, best_floors),
+        "거주층 → 주차장": get_realistic_response(avg_high_f, 0, best_floors)
+    }
+    targets = [t_1f_to_res, t_b_to_res, t_res_to_1f, t_res_to_b]
+
+    # 4. 성능 분석 표
+    st.subheader("🔍 현실적 성능 분석 결과")
     res_list = []
     for (path, est), target in zip(est_times.items(), targets):
         diff = est - target
         status = "✅ 달성" if diff <= 0 else f"⚠️ {diff:.1f}초 지연"
-        res_list.append({"동선": path, "목표": f"{target}초", "예상": f"{est:.1f}초", "결과": status})
+        res_list.append({"동선": path, "설정 목표": f"{target}초", "물리적 예상": f"{est:.1f}초", "최종 상태": status})
     
     st.table(pd.DataFrame(res_list))
     
-    st.info(f"**최적화 근거:** {reason}")
-    if any("지연" in r["결과"] for r in res_list):
-        st.warning("일부 동선에서 물리적 한계로 인한 지연이 발생합니다. 목표 시간을 현실적으로 수정하거나 장비 성능 설정을 검토하세요.")
+    # 분석 코멘트
+    if any("지연" in r["최종 상태"] for r in res_list):
+        st.error("현재 배치 설정으로는 물리적인 목표 달성이 어렵습니다. 대기 층수를 조정하거나 물리 설정을 변경해 보세요.")
+    else:
+        st.success("축하합니다! 현재 배치는 모든 동선의 목표 시간을 만족하는 효율적인 구성입니다.")토하세요.")
