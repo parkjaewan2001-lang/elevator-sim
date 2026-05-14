@@ -7,7 +7,7 @@ import random
 st.set_page_config(page_title="Elevator Experiment Lab", layout="wide")
 
 st.title("🏢 Elevator Experiment Lab")
-st.caption("건물 혼잡도(여유~매우 혼잡)에 따른 동적 지연 로직을 적용하여 성능을 분석합니다.")
+st.caption("AI 최적화, 수동 배치, 혼잡도 및 무작위 분산 대조군이 통합된 정밀 시뮬레이터입니다.")
 
 # ----------------- SIDEBAR: CONFIGURATION -----------------
 with st.sidebar:
@@ -38,23 +38,22 @@ with st.sidebar:
 # ----------------- MAIN PANEL: SCENARIO SETTINGS -----------------
 st.header("⚙️ 시뮬레이션 시나리오 및 배치")
 
-# 1. 혼잡도 설정 부활 및 로직 연동
 c_sc1, c_sc2 = st.columns(2)
 with c_sc1:
     mode_label = st.radio("⏰ 분석 시간대", ["출근 시간", "퇴근 시간", "낮 시간", "새벽 시간"], horizontal=True)
 with c_sc2:
-    # [핵심 추가] 혼잡도 선택 기능
     congestion_level = st.select_slider(
         "👥 건물 혼잡도 설정", 
         options=["매우 쾌적", "여유", "보통", "혼잡", "매우 혼잡"], 
-        value="보통",
-        help="혼잡도가 높을수록 문 개폐 시간과 승하차 지연 시간이 가중됩니다."
+        value="보통"
     )
 
 st.subheader("🚗 주차장(지하) 이용 비중")
 c_p1, c_p2 = st.columns(2)
 with c_p1: p_up_ratio = st.slider("지하에서 올라가는 비율 (%)", 0, 100, 30)
 with c_p2: p_down_ratio = st.slider("지하로 내려가는 비율 (%)", 0, 100, 40)
+
+delivery_mode = st.toggle("📦 택배 배달 지연 모드 활성화")
 
 st.divider()
 
@@ -64,15 +63,16 @@ FLOOR_LABELS = [f"B{i}" for i in range(min_f, 0, -1)] + [f"{i}F" for i in range(
 idx_1f = min_f
 total_fs = len(FLOOR_LABELS)
 
+# 배치 결정 로직
 final_placements = []
 if placement_mode == "사용자 수동 배치":
+    st.info("각 엘리베이터의 대기 위치를 직접 지정하세요.")
     m_cols = st.columns(num_elevators)
     for i in range(num_elevators):
         with m_cols[i]:
             val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f)
             final_placements.append(val)
 else:
-    # AI 최적화 로직 (User Summary 기반 단백질 모니터링 등 사용자 습관은 배제하고 물리적 로직에 집중)
     if mode_label == "출근 시간":
         final_placements = [int(np.percentile(range(idx_1f+stairs_floor, total_fs), (100/(num_elevators+1))*(i+1))) for i in range(num_elevators)]
     elif mode_label == "퇴근 시간":
@@ -81,35 +81,37 @@ else:
     else:
         final_placements = [int(f) for f in np.linspace(0, total_fs-1, num_elevators)]
     
+    st.success(f"🤖 AI 최적화 로직 적용됨")
     cols = st.columns(num_elevators)
     for i, p in enumerate(final_placements):
         cols[i].metric(f"EL {chr(65+i)} 배치", FLOOR_LABELS[p])
 
-run_btn = st.button("🚀 혼잡도 반영 성능 분석 실행", type="primary", use_container_width=True)
+run_btn = st.button("🚀 전체 시뮬레이션 분석 실행", type="primary", use_container_width=True)
 
 # ----------------- LOGIC: ENGINE -----------------
 
 def calculate_time(start_idx, end_idx, placements, congestion):
     # 혼잡도 가중치 맵
-    congestion_map = {"매우 쾌적": 0.7, "여유": 0.9, "보통": 1.1, "혼잡": 1.6, "매우 혼잡": 2.5}
-    weight = congestion_map[congestion]
+    c_map = {"매우 쾌적": 0.7, "여유": 0.9, "보통": 1.1, "혼잡": 1.6, "매우 혼잡": 2.5}
+    w = c_map[congestion]
     
     min_dist = min([abs(f_idx - start_idx) for f_idx in placements])
     
-    # 1. 대기 시간 (혼잡할수록 가속/감속 지연 증가)
-    wait_t = (min_dist * sec_per_floor) + (accel_delay * weight)
+    wait_t = (min_dist * sec_per_floor) + (accel_delay * w)
+    move_t = (abs(start_idx - end_idx) * sec_per_floor) + (accel_delay * w)
     
-    # 2. 이동 시간
-    move_t = (abs(start_idx - end_idx) * sec_per_floor) + (accel_delay * weight)
-    
-    # 3. 승하차 시간 (세대수 및 혼잡도에 따라 문 열림 시간 가중)
     household_weight = 1 + (households_per_floor * 0.05)
-    loading_t = (door_time * weight) * household_weight
+    loading_t = (door_time * w) * household_weight
     
     total = wait_t + move_t + loading_t
+    if delivery_mode: total *= 1.3
     return total
 
 if run_btn:
+    # 에러 방지를 위해 가중치 미리 정의
+    congestion_map = {"매우 쾌적": 0.7, "여유": 0.9, "보통": 1.1, "혼잡": 1.6, "매우 혼잡": 2.5}
+    current_weight = congestion_map[congestion_level]
+
     def get_random_avg(start, end, n, cong):
         return sum([calculate_time(start, end, [random.randint(0, total_fs-1) for _ in range(n)], cong) for _ in range(10)]) / 10
 
@@ -121,7 +123,7 @@ if run_btn:
         "거주층 ⬇️ 지하": (avg_res_f, 0, limit_b_down)
     }
 
-    st.subheader(f"📊 분석 결과 (혼잡도: {congestion_level})")
+    st.subheader(f"📊 분석 결과 (상태: {congestion_level})")
     m_cols = st.columns(4)
     report_list = []
     chart_data = []
@@ -132,7 +134,7 @@ if run_btn:
         
         is_exceeded = strategy_time > limit
         status_color = "normal" if not is_exceeded else "inverse"
-        
+
         with m_cols[i]:
             st.metric(name, f"{strategy_time:.1f}초", f"한계: {limit}초", delta_color=status_color)
             if is_exceeded:
@@ -143,13 +145,24 @@ if run_btn:
         report_list.append({
             "노선": name,
             "전략 적용": f"{strategy_time:.1f}초",
-            "무작위 분산 대비": f"{strategy_time - random_time:+.1f}초",
+            "무작위 분산(대조군)": f"{random_time:.1f}초",
+            "한계치": f"{limit}초",
             "상태": "안정" if not is_exceeded else "위험"
         })
-        chart_data.append({"노선": name, "현재 전략": strategy_time, "최대 허용치": limit, "무작위 분산": random_time})
+        chart_data.append({
+            "노선": name, 
+            "현재 전략": strategy_time, 
+            "최대 허용치": limit, 
+            "무작위 분산": random_time
+        })
 
     st.divider()
-    st.write("#### 📈 혼잡도 반영 성능 비교 그래프")
-    st.bar_chart(pd.DataFrame(chart_data).set_index("노선"))
     
-    st.info(f"💡 **분석 메모:** '{congestion_level}' 상태에서는 승하차 시간이 평소의 {weight}배로 계산되며, 이로 인해 대기 위치의 중요성이 더욱 커집니다.")
+    st.write("#### 📈 성능 비교 및 임계치 분석 그래프")
+    df_chart = pd.DataFrame(chart_data).set_index("노선")
+    st.bar_chart(df_chart)
+    
+    st.info(f"💡 **분석 메모:** '{congestion_level}' 상태에서는 승하차 시간이 평소의 {current_weight}배로 계산되며, 이로 인해 대기 위치의 중요성이 더욱 커집니다.")
+
+    st.write("#### 📋 상세 분석 결과 데이터")
+    st.table(pd.DataFrame(report_list))
