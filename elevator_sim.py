@@ -5,7 +5,7 @@ import numpy as np
 # ----------------- [1] UI 설정 -----------------
 st.set_page_config(page_title="Elevator Experiment Lab", layout="wide")
 st.title("🏢 Elevator Strategic Experiment Lab")
-st.caption("전략 적용 전/후 시간 비교 기능이 추가된 최종 정밀 시뮬레이터입니다.")
+st.caption("NameError를 해결하고 전략 비교 및 알고리즘 가이드를 통합한 최종 무결점 버전입니다.")
 
 # ----------------- [2] SIDEBAR: 설정 변수 -----------------
 with st.sidebar:
@@ -24,12 +24,13 @@ with st.sidebar:
     max_velocity = st.number_input("정격 속도 (m/s)", value=2.5)
     acceleration = st.number_input("가속도 (m/s²)", value=1.0)
     
-    # 기본 문 시간 설명 및 닫힘 시간 시각화
+    # 기본 문 시간 설명 및 실제 닫힘 시간 계산
     base_door_time = st.number_input("기본 문 시간 (초)", value=7.0, 
-                                    help="센서 감지가 없을 때 문이 열려 있다가 완전히 닫힐 때까지의 표준 시간입니다.")
+                                    help="엘리베이터 문이 열린 후 장애물 감지가 없을 때 자동으로 닫히기 시작할 때까지의 표준 대기 시간입니다.")
     button_efficiency = st.slider("🔘 닫힘 버튼 효율 (%)", 0, 100, 40)
+    
     actual_close_t = base_door_time * (1 - (button_efficiency / 100))
-    st.info(f"✨ 닫힘 버튼 클릭 시 문은 **{actual_close_t:.1f}초** 만에 닫힙니다.")
+    st.info(f"✨ **문 닫힘 분석:** 버튼 클릭 시 **{actual_close_t:.1f}초** 만에 닫힘 (기본 {base_door_time}초)")
 
     st.divider()
     st.header("⚠️ 서비스 임계치 (SLA)")
@@ -38,7 +39,7 @@ with st.sidebar:
     lim_p_up = st.slider("주차장 → 거주층", 30, 180, 70)
     lim_res_p = st.slider("거주층 → 주차장", 30, 180, 90)
 
-# ----------------- [3] MAIN: 전략 설정 및 가이드 -----------------
+# ----------------- [3] MAIN: 전략 설정 -----------------
 st.header("⚙️ 분석 전략 설정")
 
 FLOOR_LABELS = [f"B{i}" for i in range(min_f, 0, -1)] + [f"{i}F" for i in range(1, max_f + 1)]
@@ -55,30 +56,26 @@ with col_strat1:
     )
     logic_type = "전 층 자유 운행 (기본)" if "사용 안 함" in logic_option else logic_option
 
+    # 저층/고층부 분할 운행 가이드
     if "저층/고층부" in logic_option:
-        mid_f_idx = total_fs // 2
-        low_zone_rec = FLOOR_LABELS[idx_1f + (mid_f_idx - idx_1f) // 2]
-        high_zone_rec = FLOOR_LABELS[mid_f_idx + (total_fs - mid_f_idx) // 2]
-        st.warning(f"💡 **분할 운행 최적 배치 가이드:** 저층용 EL은 **{low_zone_rec}**, 고층용 EL은 **{high_zone_rec}** 배치를 추천합니다.")
+        mid_idx = total_fs // 2
+        st.warning(f"💡 **분할 운행 가이드:** 저층용({FLOOR_LABELS[idx_1f + (mid_idx-idx_1f)//2]}), 고층용({FLOOR_LABELS[mid_idx + (total_fs-mid_idx)//2]}) 배치를 권장합니다.")
 
 with col_strat2:
     st.subheader("📍 대기 위치 배치")
-    placement_option = st.selectbox(
-        "배치 방식 선택",
-        ["사용 안 함", "AI 자동 최적화 배치", "사용자 수동 배치"]
-    )
+    placement_option = st.selectbox("배치 방식 선택", ["사용 안 함", "AI 자동 최적화 배치", "사용자 수동 배치"])
 
 st.divider()
 
-# 내부 계산용 변수 설정
+# 변수 초기화 (NameError 방지)
 default_placements = [int(f) for f in np.linspace(0, total_fs-1, num_elevators)]
 final_placements = default_placements.copy()
 mode_label = "균등 분포"
 
-# 배치 전략 UI 제어
+# 배치 전략 UI 및 로직
 if placement_option != "사용 안 함":
     if placement_option == "AI 자동 최적화 배치":
-        mode_label = st.select_slider("⏰ 시간대 패턴 설정", options=["새벽 시간", "출근 시간", "낮 시간", "퇴근 시간"], value="낮 시간")
+        mode_label = st.select_slider("⏰ 시간대 패턴", options=["새벽 시간", "출근 시간", "낮 시간", "퇴근 시간"], value="낮 시간")
         if mode_label == "새벽 시간":
             final_placements = [idx_1f] * (num_elevators // 2) + [0] * (num_elevators - num_elevators // 2)
         elif mode_label == "출근 시간":
@@ -131,9 +128,12 @@ def simulate_route(start, end, placements, logic, cong, is_deliv, eff, base_t):
     if is_deliv: total_t *= 1.3
     return total_t
 
-# ----------------- [5] 비교 분석 실행 및 결과 -----------------
-if st.button("🚀 전략 비교 분석 실행", type="primary", use_container_width=True):
+# ----------------- [5] 실행 및 비교 분석 -----------------
+if st.button("🚀 통합 비교 분석 실행", type="primary", use_container_width=True):
+    # NameError 방지를 위한 내부 변수 확정
+    current_is_deliv = (placement_option == "AI 자동 최적화 배치" and mode_label == "새벽 시간")
     avg_res_f = idx_1f + stairs_floor + ((max_f - stairs_floor) * 0.7)
+    
     scenarios = {"1층 ⬆️ 거주층": (idx_1f, avg_res_f, lim_1f_up), "거주층 ⬇️ 1층": (avg_res_f, idx_1f, lim_res_1f),
                  "주차장 ⬆️ 거주층": (0, avg_res_f, lim_p_up), "거주층 ⬇️ 주차장": (avg_res_f, 0, lim_res_p)}
 
@@ -142,25 +142,24 @@ if st.button("🚀 전략 비교 분석 실행", type="primary", use_container_w
     chart_data = []
 
     for i, (name, (s, e, l)) in enumerate(scenarios.items()):
-        # 1. 전략 미사용 (Base Case)
-        base_t = simulate_route(s, e, default_placements, "전 층 자유 운행 (기본)", "보통", False, 0, base_door_time)
-        # 2. 전략 사용 (Strategic Case)
-        is_deliv = (placement_option == "AI 자동 최적화 배치" and mode_label == "새벽 시간")
-        strat_t = simulate_route(s, e, final_placements, logic_type, congestion, is_deliv, button_efficiency, base_door_time)
+        # 1. 기준점 (전략 미사용)
+        base_t = simulate_route(s, e, default_placements, "자유 운행", "보통", False, 0, base_door_time)
+        # 2. 현재 설정 전략
+        strat_t = simulate_route(s, e, final_placements, logic_type, congestion, current_is_deliv, button_efficiency, base_door_time)
         
-        diff = base_t - strat_t # 양수면 단축, 음수면 지연
+        diff = base_t - strat_t
 
         with m_cols[i]:
-            st.metric(name, f"{strat_t:.1f}s", delta=f"{diff:+.1f}s", delta_color="normal")
+            st.metric(name, f"{strat_t:.1f}s", delta=f"{diff:+.1f}s")
             if strat_t > l: st.error(f"지연 (목표 {l}s)")
             else: st.success(f"성공 (목표 {l}s)")
         
-        chart_data.append({"노선": name, "전략 미사용": base_t, "전략 적용": strat_t})
+        chart_data.append({"노선": name, "기준 시간(Base)": base_t, "전략 적용(Strategic)": strat_t})
 
     st.divider()
-    st.write("#### 📈 노선별 시간 차이 비교 (초)")
+    st.write("#### 📈 노선별 시간 차이 시각화")
     df_chart = pd.DataFrame(chart_data).set_index("노선")
     st.bar_chart(df_chart)
-
-    # 요약 테이블 표시
-    st.table(df_chart.assign(개선량=lambda x: x['전략 미사용'] - x['전략 적용']))
+    
+    st.write("#### 📝 상세 데이터 비교")
+    st.table(df_chart.assign(개선효과=lambda x: x['기준 시간(Base)'] - x['전략 적용(Strategic)']))
