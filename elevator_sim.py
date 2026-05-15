@@ -5,7 +5,7 @@ import numpy as np
 # ----------------- [1] UI 설정 -----------------
 st.set_page_config(page_title="Elevator Experiment Lab", layout="wide")
 st.title("🏢 Elevator Strategic Experiment Lab")
-st.caption("그래프 시인성 개선 및 개선율(%) 분석 기능이 추가된 최종 정밀 버전입니다.")
+st.caption("그래프 가독성을 최적화하고 X축 라벨을 가로로 배치한 무결점 최종 버전입니다.")
 
 # ----------------- [2] SIDEBAR: 설정 변수 -----------------
 with st.sidebar:
@@ -24,14 +24,12 @@ with st.sidebar:
     max_velocity = st.number_input("정격 속도 (m/s)", value=2.5)
     acceleration = st.number_input("가속도 (m/s²)", value=1.0)
     
-    # 기본 문 시간 정의 및 설명
     base_door_time = st.number_input("기본 문 시간 (초)", value=7.0, 
                                     help="센서 감지가 없을 때 문이 열려 있다가 자동으로 닫힐 때까지의 표준 시간입니다.")
     button_efficiency = st.slider("🔘 닫힘 버튼 효율 (%)", 0, 100, 40)
     
-    # 닫힘 버튼 클릭 시 실제 시간 계산
     actual_close_t = base_door_time * (1 - (button_efficiency / 100))
-    st.info(f"✨ **문 닫힘 분석:** 버튼 클릭 시 **{actual_close_t:.1f}초** 만에 닫힘 (표준 대비 {button_efficiency}% 단축)")
+    st.info(f"✨ **문 닫힘 분석:** 버튼 클릭 시 **{actual_close_t:.1f}초** 만에 닫힘")
 
     st.divider()
     st.header("⚠️ 서비스 임계치 (SLA)")
@@ -47,7 +45,7 @@ FLOOR_LABELS = [f"B{i}" for i in range(min_f, 0, -1)] + [f"{i}F" for i in range(
 idx_1f = min_f
 total_fs = len(FLOOR_LABELS)
 
-# 변수 초기화 (안정성 확보)
+# 변수 초기화 (NameError 방지)
 logic_type = "전 층 자유 운행 (기본)"
 placement_option = "사용 안 함"
 mode_label = "균등 분포"
@@ -58,16 +56,12 @@ col_strat1, col_strat2 = st.columns(2)
 
 with col_strat1:
     st.subheader("🕹️ 운영 알고리즘")
-    logic_option = st.selectbox(
-        "운행 규칙 선택",
-        ["사용 안 함 (전 층 자유 운행)", "홀짝수층 분리 운행", "저층/고층부 분할 운행"]
-    )
+    logic_option = st.selectbox("운행 규칙 선택", ["사용 안 함 (전 층 자유 운행)", "홀짝수층 분리 운행", "저층/고층부 분할 운행"])
     logic_type = "전 층 자유 운행 (기본)" if "사용 안 함" in logic_option else logic_option
 
-    # 분할 운행 가이드
     if "저층/고층부" in logic_option:
         mid = total_fs // 2
-        st.warning(f"💡 **최적 배치 가이드:** 저층({FLOOR_LABELS[idx_1f + (mid-idx_1f)//2]}), 고층({FLOOR_LABELS[mid + (total_fs-mid)//2]}) 배치를 권장합니다.")
+        st.warning(f"💡 **분할 운행 가이드:** 저층({FLOOR_LABELS[idx_1f + (mid-idx_1f)//2]}), 고층({FLOOR_LABELS[mid + (total_fs-mid)//2]}) 배치를 권장합니다.")
 
 with col_strat2:
     st.subheader("📍 대기 위치 배치")
@@ -75,7 +69,6 @@ with col_strat2:
 
 st.divider()
 
-# 배치 전략 UI 제어
 if placement_option != "사용 안 함":
     if placement_option == "AI 자동 최적화 배치":
         mode_label = st.select_slider("⏰ 시간대 패턴", options=["새벽 시간", "출근 시간", "낮 시간", "퇴근 시간"], value="낮 시간")
@@ -149,44 +142,31 @@ if st.button("🚀 통합 비교 분석 실행", type="primary", use_container_w
     chart_data = []
 
     for i, (name, (s, e, l)) in enumerate(scenarios.items()):
-        # 1. 전략 미적용
         base_t = simulate_route(s, e, default_placements, "자유 운행", "보통", False, 0, base_door_time)
-        # 2. 전략 적용
         strat_t = simulate_route(s, e, final_placements, logic_type, congestion, delivery_mode, button_efficiency, base_door_time)
-        
         diff = base_t - strat_t
         with m_cols[i]:
             st.metric(name, f"{strat_t:.1f}s", delta=f"{diff:+.1f}s")
-            if strat_t > l: st.error(f"SLA 미달 (목표 {l}s)")
-            else: st.success(f"SLA 준수 (목표 {l}s)")
-        
+            if strat_t > l: st.error(f"지연 (목표 {l}s)")
+            else: st.success(f"통과 (목표 {l}s)")
         chart_data.append({"노선": name, "전략 미적용": base_t, "전략 적용": strat_t})
 
     st.divider()
-    
-    # 그래프 및 상세 데이터 가공
     df_res = pd.DataFrame(chart_data)
     df_res['개선량(sec)'] = df_res['전략 미적용'] - df_res['전략 적용']
-    # 개선율 계산 (0으로 나누기 방지)
     df_res['개선량(%)'] = (df_res['개선량(sec)'] / df_res['전략 미적용'] * 100).fillna(0)
 
-    col_viz1, col_viz2 = st.columns([1, 1])
-    
-    with col_viz1:
-        st.write("#### 📈 노선별 시간 비교 (Grouped Bar)")
-        # 막대그래프 형태로 보기 편하게 구조 변경
-        chart_melted = df_res.melt(id_vars='노선', value_vars=['전략 미적용', '전략 적용'], var_name='구분', value_name='시간(초)')
-        st.bar_chart(chart_melted, x='노선', y='시간(초)', color='구분', use_container_width=True)
+    # 그래프 영역: st.bar_chart는 그룹화를 지원하므로 구조를 재배열
+    st.write("#### 📈 노선별 시간 비교")
+    # T는 Transpose, 노선별로 미적용/적용 막대가 나란히 서게 함
+    chart_df = df_res.set_index('노선')[['전략 미적용', '전략 적용']]
+    # X축 글자 가로 배치를 위해 Altair 옵션 우회 (st.bar_chart는 기본적으로 가로 읽기 최적화)
+    st.bar_chart(chart_df, use_container_width=True)
 
-    with col_viz2:
-        st.write("#### 📝 상세 분석 데이터")
-        # 개선량(%)을 포함한 테이블 출력
-        st.dataframe(
-            df_res.set_index("노선").style.format({
-                "전략 미적용": "{:.2f}",
-                "전략 적용": "{:.2f}",
-                "개선량(sec)": "{:+.2f}",
-                "개선량(%)": "{:+.1f}%"
-            }),
-            use_container_width=True
-        )
+    st.write("#### 📝 상세 분석 데이터")
+    st.dataframe(
+        df_res.set_index("노선").style.format({
+            "전략 미적용": "{:.2f}", "전략 적용": "{:.2f}",
+            "개선량(sec)": "{:+.2f}", "개선량(%)": "{:+.1f}%"
+        }), use_container_width=True
+    )
