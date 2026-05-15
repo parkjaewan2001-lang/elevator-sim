@@ -7,7 +7,7 @@ import altair as alt
 st.set_page_config(page_title="Elevator Experiment Lab", layout="wide")
 st.title("🏢 Elevator Strategic Experiment Lab")
 
-# ----------------- [2] SIDEBAR: 설정 변수 (물리 엔진 & SLA) -----------------
+# ----------------- [2] SIDEBAR: 설정 변수 (이전 기능 전체 유지) -----------------
 with st.sidebar:
     st.header("🏗️ 건물 및 세대 설정")
     c1, c2 = st.columns(2)
@@ -35,7 +35,7 @@ with st.sidebar:
     lim_p_up = st.slider("주차장 → 거주층", 30, 180, 70)
     lim_res_p = st.slider("거주층 → 주차장", 30, 180, 90)
 
-# ----------------- [3] MAIN: 전략 및 운영 설정 -----------------
+# ----------------- [3] MAIN: 전략 및 배치 설정 -----------------
 st.header("⚙️ 분석 전략 및 운영 설정")
 
 FLOOR_LABELS = [f"B{i}" for i in range(min_f, 0, -1)] + [f"{i}F" for i in range(1, max_f + 1)]
@@ -52,15 +52,22 @@ with col_strat2:
 
 st.divider()
 
+# 변수 초기화
 active_placements = []
 current_is_deliv = False
 
-# [기능 통합] 운행 규칙이나 배치 방식 중 하나라도 활성화되면 시간대 패턴 설정 가능
-if logic_option != "사용 안 함 (전 층 자유 운행)" or placement_option == "AI 자동 최적화 배치":
-    st.subheader("⏰ 운영 및 배치 시간대 설정")
-    mode_label = st.select_slider("시뮬레이션 시간대 패턴 선택", options=["새벽 시간", "출근 시간", "낮 시간", "퇴근 시간"], value="낮 시간")
-    
-    # 시간대별 배치 로직 계산
+# [핵심 수정] 고층부/저층부 분할 배치는 시간대와 상관없이 '고정' 배치
+if logic_option == "고층부/저층부 분할 배치":
+    mid_idx = (total_fs + idx_1f) // 2
+    # 저층부 대표층(지상 저층 중심)과 고층부 대표층(지상 고층 중심)으로 고정 배치
+    low_zone_fix = int(idx_1f + (mid_idx - idx_1f) / 2)
+    high_zone_fix = int(mid_idx + (total_fs - mid_idx) / 2)
+    active_placements = [low_zone_fix if i < num_elevators/2 else high_zone_fix for i in range(num_elevators)]
+
+# AI 자동 최적화 배치 (시간대에 따라 유동적)
+if placement_option == "AI 자동 최적화 배치":
+    st.subheader("⏰ AI 최적화 시간대 설정")
+    mode_label = st.select_slider("시뮬레이션 시간대 패턴", options=["새벽 시간", "출근 시간", "낮 시간", "퇴근 시간"], value="낮 시간")
     if mode_label == "새벽 시간":
         active_placements = [idx_1f] * (num_elevators // 2) + [0] * (num_elevators - num_elevators // 2)
         current_is_deliv = True 
@@ -71,27 +78,30 @@ if logic_option != "사용 안 함 (전 층 자유 운행)" or placement_option 
     else: # 낮 시간
         active_placements = [int(f) for f in np.linspace(0, total_fs-1, num_elevators)]
 
-if placement_option == "사용자 수동 배치":
+# 수동 배치 (사용자 지정)
+elif placement_option == "사용자 수동 배치":
     st.subheader("✍️ 수동 배치 설정")
     m_cols = st.columns(num_elevators)
     active_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v5_m_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v6_m_{i}")
             active_placements.append(val)
 
+# 기본값 (전략 미지정 시 균등 분포)
 if not active_placements:
     active_placements = [int(f) for f in np.linspace(0, total_fs-1, num_elevators)]
 
-# [로직 수정] 배치 방식을 사용할 때는 분할 배치 가이드를 숨김
+# [UI 가이드] 배치 방식 미사용 시에만 '분할 배치 가이드' 노출
 with st.container():
     if placement_option == "사용 안 함" and "분할 배치" in logic_option:
         st.markdown("""<style>.guide-box { background-color: #f0f7ff; padding: 15px; border-radius: 10px; border-left: 5px solid #0068c9; margin-bottom: 20px; }</style>""", unsafe_allow_html=True)
         mid_idx = (total_fs + idx_1f) // 2
         guide_text = f"""
-        💡 **고층부 / 저층부 분할 배치 가이드** (배치 방식 미사용 시 적용)<br>
+        💡 **고층부 / 저층부 고정 배치 가이드** (분할 운행 규칙 적용됨)<br>
         - **저층부 구역 담당 (B{min_f} ~ {FLOOR_LABELS[mid_idx]}):** {', '.join([f'EL {chr(65+i)}' for i in range(num_elevators) if i < num_elevators/2])}<br>
-        - **고층부 구역 담당 ({FLOOR_LABELS[mid_idx+1]} ~ {max_f}F):** {', '.join([f'EL {chr(65+i)}' for i in range(num_elevators) if i >= num_elevators/2])}
+        - **고층부 구역 담당 ({FLOOR_LABELS[mid_idx+1]} ~ {max_f}F):** {', '.join([f'EL {chr(65+i)}' for i in range(num_elevators) if i >= num_elevators/2])}<br>
+        *분할 배치 규칙에 따라 담당 엘리베이터가 해당 구역 중심층에 고정 배치되었습니다.*
         """
         st.markdown(f'<div class="guide-box">{guide_text}</div>', unsafe_allow_html=True)
 
@@ -128,12 +138,12 @@ def simulate_route(start, end, placements, logic, cong, is_deliv, eff, base_t):
     return total_t
 
 # ----------------- [5] 결과 확인 및 꺽은선 그래프 -----------------
-st.subheader("🌐 환경 설정 및 최종 시뮬레이션")
+st.subheader("🌐 시뮬레이션 실행")
 c_env1, c_env2 = st.columns(2)
 with c_env1: congestion = st.select_slider("건물 혼잡도", options=["매우 쾌적", "보통", "매우 혼잡"], value="보통")
 with c_env2: delivery_mode = st.toggle("📦 배송 지연 가중치 반영", value=current_is_deliv)
 
-if st.button("🚀 전체 전략 분석 실행", type="primary", use_container_width=True):
+if st.button("🚀 분석 데이터 생성", type="primary", use_container_width=True):
     control_placements = [int(f) for f in np.linspace(0, total_fs-1, num_elevators)]
     avg_f = int(idx_1f + (max_f - 1) * 0.7)
     
@@ -161,26 +171,25 @@ if st.button("🚀 전체 전략 분석 실행", type="primary", use_container_w
 
     df_res = pd.DataFrame(results)
 
-    # [수정] 꺽은선 그래프 (Line Chart) 구현
-    st.write("### 📈 노선별 시간 흐름 및 대조 (Line Chart)")
+    # 꺽은선 그래프
+    st.write("### 📈 전략별 성능 비교 (Line Chart)")
     line_chart = alt.Chart(df_res).mark_line(point=True, strokeWidth=3).encode(
-        x=alt.X('노선:N', title='분석 노선', axis=alt.Axis(labelAngle=0)),
+        x=alt.X('노선:N', title=None, axis=alt.Axis(labelAngle=0)),
         y=alt.Y('시간:Q', title='소요 시간(초)'),
-        color=alt.Color('구분:N', scale=alt.Scale(range=['#e74c3c', '#2ecc71']), title="전략 구분"),
+        color=alt.Color('구분:N', scale=alt.Scale(range=['#E74C3C', '#2ECC71'])),
         tooltip=['노선', '구분', '시간']
-    ).properties(width=800, height=450).interactive()
-    
+    ).properties(width=800, height=400).interactive()
     st.altair_chart(line_chart, use_container_width=True)
 
-    # 데이터 요약
-    st.write("### 📝 상세 시뮬레이션 데이터")
+    # 상세 데이터 요약
+    st.write("### 📝 최종 데이터 요약")
     df_p = df_res.pivot(index='노선', columns='구분', values='시간').reset_index()
-    df_p['개선 시간(sec)'] = df_p['전략 미적용'] - df_p['전략 적용']
-    df_p['개선 효율(%)'] = (df_p['개선 시간(sec)'] / df_p['전략 미적용'] * 100).fillna(0)
+    df_p['개선 시간(s)'] = df_p['전략 미적용'] - df_p['전략 적용']
+    df_p['개선율(%)'] = (df_p['개선 시간(s)'] / df_p['전략 미적용'] * 100).fillna(0)
     
     st.dataframe(
         df_p.set_index('노선').style.format({
             "전략 미적용": "{:.2f}", "전략 적용": "{:.2f}",
-            "개선 시간(sec)": "{:+.2f}", "개선 효율(%)": "{:.1f}%"
+            "개선 시간(s)": "{:+.2f}", "개선율(%)": "{:.1f}%"
         }), use_container_width=True
     )
