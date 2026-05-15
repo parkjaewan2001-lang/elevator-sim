@@ -6,7 +6,7 @@ import altair as alt
 # ----------------- [1] UI 설정 -----------------
 st.set_page_config(page_title="Elevator Experiment Lab", layout="wide")
 st.title("🏢 Elevator Strategic Experiment Lab")
-st.caption("각 구역별 엘리베이터의 정확한 배치 층수를 실시간으로 리포트하는 최종 수정 버전입니다.")
+st.caption("배치 층수 명시, 문 닫힘 효율 분석 등 모든 기능이 완벽하게 복구된 버전입니다.")
 
 # ----------------- [2] SIDEBAR: 설정 변수 -----------------
 with st.sidebar:
@@ -28,8 +28,13 @@ with st.sidebar:
     base_door_time = st.number_input("기본 문 시간 (초)", value=7.0)
     button_efficiency = st.slider("🔘 닫힘 버튼 효율 (%)", 0, 100, 40)
     
+    # [복구 기능] 문 닫힘 분석 정보 표시
     actual_close_t = base_door_time * (1 - (button_efficiency / 100))
-    st.info(f"✨ **문 닫힘 분석:** {actual_close_t:.1f}초")
+    st.info(f"""
+    ✨ **문 닫힘 분석**
+    - 버튼 사용 시 **{button_efficiency}%** 시간 감소
+    - 최종 닫힘 시간: **{actual_close_t:.1f}초**
+    """)
 
     st.divider()
     st.header("⚠️ 서비스 임계치 (SLA)")
@@ -61,10 +66,10 @@ st.divider()
 active_placements = []
 current_is_deliv = False
 
-# [핵심 로직] 배치 설정 및 가이드 출력
+# 1단계: 배치 층수 결정 로직 (AI / 수동 / 기본)
 if placement_option == "AI 자동 최적화 배치":
-    st.subheader("🤖 AI 최적화 시나리오 설정")
-    mode_label = st.select_slider("⏰ 시간대 패턴", options=["새벽 시간", "출근 시간", "낮 시간", "퇴근 시간"], value="낮 시간")
+    st.subheader("🤖 AI 최적화 설정")
+    mode_label = st.select_slider("⏰ 운영 시간대 패턴", options=["새벽 시간", "출근 시간", "낮 시간", "퇴근 시간"], value="낮 시간")
     
     if mode_label == "새벽 시간":
         active_placements = [idx_1f] * (num_elevators // 2) + [0] * (num_elevators - num_elevators // 2)
@@ -77,35 +82,31 @@ if placement_option == "AI 자동 최적화 배치":
         active_placements = [int(f) for f in np.linspace(0, total_fs-1, num_elevators)]
 
 elif placement_option == "사용자 수동 배치":
-    st.subheader("✍️ 수동 대기 층 지정")
+    st.subheader("✍️ 수동 배치 설정")
     m_cols = st.columns(num_elevators)
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"m_fix_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"manual_v3_{i}")
             active_placements.append(val)
 else:
-    # 배치 '사용 안 함' 시 UI 숨김 및 기본 균등 배치
+    # '사용 안 함'인 경우 균등 분포를 기본값으로 하되 UI는 노출하지 않음
     active_placements = [int(f) for f in np.linspace(0, total_fs-1, num_elevators)]
 
-# [가이드 상세화] 고층부/저층부 분할 배치 시 정확한 층수 명시
+# 2단계: [핵심] 배치 결과 리포트 (가이드 명시)
 if placement_option != "사용 안 함":
+    # '고층부/저층부 분할 배치' 선택 시 구역별 엘리베이터의 정확한 층수를 리스트업
     if "분할 배치" in logic_option:
         mid_idx = (total_fs + idx_1f) // 2
-        low_zone_list = []
-        high_zone_list = []
+        low_zone_els = [f"**EL {chr(65+i)}** ({FLOOR_LABELS[active_placements[i]]})" for i in range(num_elevators) if i < num_elevators/2]
+        high_zone_els = [f"**EL {chr(65+i)}** ({FLOOR_LABELS[active_placements[i]]})" for i in range(num_elevators) if i >= num_elevators/2]
         
-        for i in range(num_elevators):
-            info = f"**EL {chr(65+i)}** ({FLOOR_LABELS[active_placements[i]]})"
-            if i < num_elevators/2: low_zone_list.append(info)
-            else: high_zone_list.append(info)
-            
         st.success(f"""
-        🧭 **고층부/저층부 분할 배치 - 실시간 대기 현황**
-        * **저층 구역 담당 엘리베이터:** {', '.join(low_zone_list)}
-        * **고층 구역 담당 엘리베이터:** {', '.join(high_zone_list)}
+        🧭 **고층부/저층부 분할 배치 - 실제 배치 층수**
+        - **저층부 담당 ({FLOOR_LABELS[0]} ~ {FLOOR_LABELS[mid_idx]}):** {', '.join(low_zone_els)}
+        - **고층부 담당 ({FLOOR_LABELS[mid_idx+1]} ~ {FLOOR_LABELS[-1]}):** {', '.join(high_zone_els)}
         """)
 
-    st.write(f"**현재 설정된 개별 배치 상태:**")
+    st.write(f"**현재 설정된 상세 배치 현황:**")
     disp_cols = st.columns(num_elevators)
     for i, p in enumerate(active_placements):
         disp_cols[i].metric(f"EL {chr(65+i)}", FLOOR_LABELS[p])
@@ -130,6 +131,7 @@ def simulate_route(start, end, placements, logic, cong, is_deliv, eff, base_t):
             if start <= idx_1f or (i < num_elevators/2 and start <= mid) or (i >= num_elevators/2 and start > mid): avail.append(i)
     
     if not avail: avail = [0]
+    # 전달받은 placements를 정확히 참조하여 대기 시간 계산
     min_dist_m = min([abs(placements[idx] - start) for idx in avail]) * floor_height
     wait_t = get_phys_time(min_dist_m, max_velocity, acceleration)
     move_t = get_phys_time(abs(start - end) * floor_height, max_velocity, acceleration)
@@ -141,12 +143,13 @@ def simulate_route(start, end, placements, logic, cong, is_deliv, eff, base_t):
     return total_t
 
 # ----------------- [5] 시뮬레이션 환경 및 실행 -----------------
-st.subheader("🌐 시뮬레이션 환경 확인")
+st.subheader("🌐 환경 정보 및 대조군 분석")
 c_env1, c_env2 = st.columns(2)
 with c_env1: congestion = st.select_slider("건물 혼잡도", options=["매우 쾌적", "보통", "매우 혼잡"], value="보통")
 with c_env2: delivery_mode = st.toggle("📦 배송 지연 가중치 반영", value=current_is_deliv)
 
-if st.button("🚀 전략 대조 분석 실행", type="primary", use_container_width=True):
+if st.button("🚀 정밀 대조 시뮬레이션 시작", type="primary", use_container_width=True):
+    # 대조군용 표준 배치 (항상 일정한 균등 분포)
     control_placements = [int(f) for f in np.linspace(0, total_fs-1, num_elevators)]
     avg_f_val = int(idx_1f + (max_f - 1) * 0.7)
     
@@ -157,14 +160,14 @@ if st.button("🚀 전략 대조 분석 실행", type="primary", use_container_w
         "거주층 → 주차장": (avg_f_val, 0, lim_res_p)
     }
 
-    st.subheader("📊 분석 결과 리포트")
+    st.subheader("📊 전략 대조 리포트")
     m_cols = st.columns(4)
     results = []
 
     for i, (name, (s, e, l)) in enumerate(scenarios.items()):
-        # 대조군 (전략 미적용)
+        # 전략 미적용 (고정 대조군)
         t_base = simulate_route(s, e, control_placements, "자유 운행", congestion, delivery_mode, 0, base_door_time)
-        # 실험군 (전략 적용)
+        # 전략 적용 (사용자가 설정한 active_placements 적용)
         t_strat = simulate_route(s, e, active_placements, logic_type, congestion, delivery_mode, button_efficiency, base_door_time)
         
         diff = t_base - t_strat
@@ -179,7 +182,8 @@ if st.button("🚀 전략 대조 분석 실행", type="primary", use_container_w
     st.divider()
     df_res = pd.DataFrame(results)
 
-    st.write("#### 📈 노선별 소요 시간 비교 (가로형 X축)")
+    # 차트 (가로형 X축 라벨 유지)
+    st.write("#### 📈 노선별 시간 대조 그래프")
     chart = alt.Chart(df_res).mark_bar().encode(
         x=alt.X('구분:N', title=None, axis=alt.Axis(labels=True)),
         y=alt.Y('시간(초):Q', title='소요 시간(초)'),
@@ -189,7 +193,8 @@ if st.button("🚀 전략 대조 분석 실행", type="primary", use_container_w
     
     st.altair_chart(chart, use_container_width=False)
 
-    st.write("#### 📝 데이터 요약 테이블")
+    # 데이터 테이블 (개선량% 포함)
+    st.write("#### 📝 상세 수치 분석")
     df_pivot = df_res.pivot(index='노선', columns='구분', values='시간(초)').reset_index()
     df_pivot['개선량(sec)'] = df_pivot['전략 미적용'] - df_pivot['전략 적용']
     df_pivot['개선량(%)'] = (df_pivot['개선량(sec)'] / df_pivot['전략 미적용'] * 100).replace([np.inf, -np.inf], 0).fillna(0)
