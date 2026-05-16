@@ -58,7 +58,7 @@ with c_custom:
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v3_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v4_{i}")
             manual_placements.append(val)
 
 st.divider()
@@ -191,7 +191,7 @@ if st.button("🚀 전체 분석 및 개선 지표 산출 시작", type="primary
     ).properties(width=1000, height=450).interactive()
     st.altair_chart(multi_line, use_container_width=True)
     
-    # 2. 피벗 후 변동 수치 계산 처리 (오류 해결 지점)
+    # 2. 피벗 후 변동 수치 계산 처리
     st.write("### 📊 전략 효율성 대조 및 시간 단축 변동 매트릭스")
     df_pivot = df_matrix.pivot(index='시나리오 노선', columns='운영 전략', values='소요 시간(초)').reset_index()
     
@@ -219,9 +219,4 @@ if st.button("🚀 전체 분석 및 개선 지표 산출 시작", type="primary
             
     st.dataframe(df_final_render[ordered_cols], use_container_width=True)
     
-    # 3. 최적 전략 리포트
-    summary_data = df_matrix.groupby('운영 전략')['소요 시간(초)'].mean().reset_index()
-    best_strategy = summary_data.sort_values(by='소요 시간(초)').iloc[0]['운영 전략']
-    best_time = summary_data.sort_values(by='소요 시간(초)').iloc[0]['소요 시간(초)']
-    
-    st.success(f"🏆 **종합 리포트:** '전략 미적용(랜덤 분산 상태)'과 전격 비교 결과, 현재 빌딩 환경에서 가장 탁월한 시간 단축력을 보인 운영 전략은 **[{best_strategy}]** (평균 {best_time:.1f}초) 입니다.")
+    # 종합 리포트 안내창(st.success) 블록이 요청에 따라 안전하게 삭제되었습니다.
