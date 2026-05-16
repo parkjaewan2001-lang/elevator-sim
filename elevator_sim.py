@@ -8,7 +8,7 @@ st.set_page_config(page_title="Elevator Experiment Lab", layout="wide")
 st.title("🏢 Elevator Strategic Experiment Lab")
 st.subheader("📊 전(全) 전략 다중 비교 및 효율성 분석 매트릭스")
 
-# ----------------- [2] SIDEBAR: 설정 변수 -----------------
+# ----------------- [2] SIDEBAR: 설정 변수 (SLA까지 모두 숫자 입력으로 통일) -----------------
 with st.sidebar:
     st.header("🏗️ 건물 및 세대 설정")
     c1, c2 = st.columns(2)
@@ -29,16 +29,16 @@ with st.sidebar:
     base_door_time = st.number_input("기본 문 시간 (초)", value=7.0)
     button_efficiency = st.slider("🔘 닫힘 버튼 효율 (%)", 0, 100, 40)
     
-    # 문 닫힘 버튼으로 단축되는 시간 직관적 표기
     saved_door_time = base_door_time * (button_efficiency / 100)
     st.info(f"💡 문 닫힘 버튼 클릭 시 층당 **{saved_door_time:.2f}초** 단축 효과")
 
     st.divider()
-    st.header("⚠️ 서비스 임계치 (SLA)")
-    lim_1f_up = st.slider("1층 → 거주층", 30, 180, 60)
-    lim_res_1f = st.slider("거주층 → 1층", 30, 180, 80)
-    lim_p_up = st.slider("주차장 → 거주층", 30, 180, 70)
-    lim_res_p = st.slider("거주층 → 주차장", 30, 180, 90)
+    # [변경] 서비스 임계치(SLA): 직접 입력 가능하도록 number_input으로 전면 교체
+    st.header("⚠️ 서비스 임계치 (SLA) 설정")
+    lim_1f_up = st.number_input("SLA: 1층 → 거주층 (초)", value=60, min_value=10)
+    lim_res_1f = st.number_input("SLA: 거주층 → 1층 (초)", value=80, min_value=10)
+    lim_p_up = st.number_input("SLA: 주차장 → 거주층 (초)", value=70, min_value=10)
+    lim_res_p = st.number_input("SLA: 거주층 → 주차장 (초)", value=90, min_value=10)
 
 # ----------------- [3] MAIN: 인풋 설정 및 독립성 확보 -----------------
 FLOOR_LABELS = [f"B{i}" for i in range(min_f, 0, -1)] + [f"{i}F" for i in range(1, max_f + 1)]
@@ -59,15 +59,15 @@ with c_custom:
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v2_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v3_{i}")
             manual_placements.append(val)
 
 st.divider()
 
-# --- 각 전략별 독립 배치 계산 (상호 간섭 배제) ---
+# --- 각 전략별 독립 배치 계산 ---
 strategies_config = {}
 
-# 1. 전략 미적용 (전 층 무작위 랜덤 분산 상태 가정 - 시뮬레이터 내부에서 난수 시드 기반 고정 배정)
+# 1. 전략 미적용 (전 층 무작위 랜덤 분산 상태 가정)
 np.random.seed(42) 
 strategies_config["전략 미적용 (랜덤 운행)"] = {"placements": list(np.random.randint(0, total_fs, num_elevators)), "logic": "자유 운행"}
 
@@ -163,7 +163,6 @@ if st.button("🚀 전체 분석 및 개선 지표 산출 시작", type="primary
     
     for s_name, (start, end, limit) in scenarios.items():
         for strat_name, config in strategies_config.items():
-            # 대조군(전략 미적용)일 때는 임의의 보정을 제거하여 순수 랜덤 상태 측정
             eff_param = button_efficiency if strat_name != "전략 미적용 (랜덤 운행)" else 0
             p_rate_param = parking_usage_rate if strat_name != "전략 미적용 (랜덤 운행)" else 0
             s_floor_param = stairs_floor if strat_name != "전략 미적용 (랜덤 운행)" else 0
@@ -183,7 +182,7 @@ if st.button("🚀 전체 분석 및 개선 지표 산출 시작", type="primary
             
     df_matrix = pd.DataFrame(matrix_results)
     
-    # 1. 멀티 라인 차트
+    # 1. 멀티 라인 차트 시각화
     st.write("### 📈 전략별 성능 추이 시각화 (기준: 전략 미적용 랜덤 운행)")
     multi_line = alt.Chart(df_matrix).mark_line(point=True, strokeWidth=3).encode(
         x=alt.X('시나리오 노선:N', title=None, axis=alt.Axis(labelAngle=0)),
@@ -194,40 +193,4 @@ if st.button("🚀 전체 분석 및 개선 지표 산출 시작", type="primary
     st.altair_chart(multi_line, use_container_width=True)
     
     # 2. 피벗 후 변동 수치 계산 처리
-    st.write("### 📊 전략 효율성 대조 및 시간 단축 변동 매트릭스")
-    df_pivot = df_matrix.pivot(index='시나리오 노선', columns='운영 전략', values='소요 시간(초)').reset_index()
-    
-    # 각 전략별로 대조군(전략 미적용 (랜덤 운행)) 대비 증감량 및 % 계산 후 멀티 인덱스처럼 보이도록 테이블 가공
-    base_col = "전략 미적용 (랜덤 운행)"
-    final_table_data = {"시나리오 노선": df_pivot["시나리오 노선"]}
-    final_table_data[f"{base_col} (기준값)"] = df_pivot[base_col].map(lambda x: f"{x:.1f}s")
-    
-    for col in df_pivot.columns:
-        if col in ["시나리오 노선", base_col]:
-            continue
-        
-        # 실제 연산값 도출
-        diff_sec = df_pivot[col] - df_pivot[base_col]
-        diff_pct = (diff_sec / df_pivot[base_col]) * 100
-        
-        # 부호 처리를 포함한 텍스트 맵핑
-        final_table_data[col] = df_pivot[col].astype(str) + "s"
-        final_table_data[f"{col} 변동량 (초)"] = diff_sec.map(lambda x: f"{x:+.1f}초")
-        final_table_data[f"{col} 효율 (%)"] = diff_pct.map(lambda x: f"{x:+.1f}%")
-        
-    df_final_render = pd.DataFrame(final_table_data).set_index("시나리오 노선")
-    
-    # 컬럼 가독성을 위해 순서 정렬 (기본값 뒤에 각 전략의 결과-변동량-%가 순서대로 오도록 구조화)
-    ordered_cols = [f"{base_col} (기준값)"]
-    for col in df_pivot.columns:
-        if col not in ["시나리오 노선", base_col]:
-            ordered_cols.extend([col, f"{col} 변동량 (초)", f"{col} 효율 (%)"])
-            
-    st.dataframe(df_final_render[ordered_cols], use_container_width=True)
-    
-    # 3. 최적 전략 리포트
-    summary_data = df_matrix.groupby('운영 전략')['소요 시간(초)'].mean().reset_index()
-    best_strategy = summary_data.sort_values(by='소요 시간(초)').iloc[0]['운영 전략']
-    best_time = summary_data.sort_values(by='소요 시간(초)').iloc[0]['소요 시간(초)']
-    
-    st.success(f"🏆 **종합 리포트:** '전략 미적용(랜덤 분산 상태)'과 전격 비교 결과, 현재 빌딩 환경에서 가장 탁월한 억제력을 보인 운영 전략은 **[{best_strategy}]** (평균 {best_time:.1f}초) 입니다.")
+    st.write("### 📊 전략 효율성 대조 및 시간 단축 변동 매트릭스
