@@ -8,7 +8,7 @@ st.set_page_config(page_title="Elevator Experiment Lab", layout="wide")
 st.title("🏢 Elevator Strategic Experiment Lab")
 st.subheader("📊 전(全) 전략 다중 비교 및 효율성 분석 매트릭스")
 
-# ----------------- [2] SIDEBAR: 설정 변수 (SLA까지 모두 숫자 입력으로 통일) -----------------
+# ----------------- [2] SIDEBAR: 설정 변수 -----------------
 with st.sidebar:
     st.header("🏗️ 건물 및 세대 설정")
     c1, c2 = st.columns(2)
@@ -33,7 +33,6 @@ with st.sidebar:
     st.info(f"💡 문 닫힘 버튼 클릭 시 층당 **{saved_door_time:.2f}초** 단축 효과")
 
     st.divider()
-    # [변경] 서비스 임계치(SLA): 직접 입력 가능하도록 number_input으로 전면 교체
     st.header("⚠️ 서비스 임계치 (SLA) 설정")
     lim_1f_up = st.number_input("SLA: 1층 → 거주층 (초)", value=60, min_value=10)
     lim_res_1f = st.number_input("SLA: 거주층 → 1층 (초)", value=80, min_value=10)
@@ -192,5 +191,37 @@ if st.button("🚀 전체 분석 및 개선 지표 산출 시작", type="primary
     ).properties(width=1000, height=450).interactive()
     st.altair_chart(multi_line, use_container_width=True)
     
-    # 2. 피벗 후 변동 수치 계산 처리
-    st.write("### 📊 전략 효율성 대조 및 시간 단축 변동 매트릭스
+    # 2. 피벗 후 변동 수치 계산 처리 (오류 해결 지점)
+    st.write("### 📊 전략 효율성 대조 및 시간 단축 변동 매트릭스")
+    df_pivot = df_matrix.pivot(index='시나리오 노선', columns='운영 전략', values='소요 시간(초)').reset_index()
+    
+    base_col = "전략 미적용 (랜덤 운행)"
+    final_table_data = {"시나리오 노선": df_pivot["시나리오 노선"]}
+    final_table_data[f"{base_col} (기준값)"] = df_pivot[base_col].map(lambda x: f"{x:.1f}s")
+    
+    for col in df_pivot.columns:
+        if col in ["시나리오 노선", base_col]:
+            continue
+        
+        diff_sec = df_pivot[col] - df_pivot[base_col]
+        diff_pct = (diff_sec / df_pivot[base_col]) * 100
+        
+        final_table_data[col] = df_pivot[col].astype(str) + "s"
+        final_table_data[f"{col} 변동량 (초)"] = diff_sec.map(lambda x: f"{x:+.1f}초")
+        final_table_data[f"{col} 효율 (%)"] = diff_pct.map(lambda x: f"{x:+.1f}%")
+        
+    df_final_render = pd.DataFrame(final_table_data).set_index("시나리오 노선")
+    
+    ordered_cols = [f"{base_col} (기준값)"]
+    for col in df_pivot.columns:
+        if col not in ["시나리오 노선", base_col]:
+            ordered_cols.extend([col, f"{col} 변동량 (초)", f"{col} 효율 (%)"])
+            
+    st.dataframe(df_final_render[ordered_cols], use_container_width=True)
+    
+    # 3. 최적 전략 리포트
+    summary_data = df_matrix.groupby('운영 전략')['소요 시간(초)'].mean().reset_index()
+    best_strategy = summary_data.sort_values(by='소요 시간(초)').iloc[0]['운영 전략']
+    best_time = summary_data.sort_values(by='소요 시간(초)').iloc[0]['소요 시간(초)']
+    
+    st.success(f"🏆 **종합 리포트:** '전략 미적용(랜덤 분산 상태)'과 전격 비교 결과, 현재 빌딩 환경에서 가장 탁월한 시간 단축력을 보인 운영 전략은 **[{best_strategy}]** (평균 {best_time:.1f}초) 입니다.")
