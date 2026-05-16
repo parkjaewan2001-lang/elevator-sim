@@ -58,20 +58,28 @@ with c_custom:
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v5_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v6_{i}")
             manual_placements.append(val)
 
 st.divider()
 
 # --- 각 전략별 독립 배치 계산 ---
 strategies_config = {}
+np.random.seed(42) 
 
 # 1. 전략 미적용 (전 층 무작위 랜덤 분산 상태 가정)
-np.random.seed(42) 
 strategies_config["전략 미적용 (랜덤 운행)"] = {"placements": list(np.random.randint(0, total_fs, num_elevators)), "logic": "자유 운행"}
 
-# 2. 홀짝수층 분리 운행 (랜덤 위치 상태에서 규칙만 적용)
-strategies_config["홀짝수층 분리 운행"] = {"placements": list(np.random.randint(0, total_fs, num_elevators)), "logic": "홀짝 운행"}
+# 2. [수정] 홀짝수층 분리 운행 (각자의 전담 운행 구역 내에서 개별 랜덤 분산 위치 적용)
+oe_placements = []
+for i in range(num_elevators):
+    if i % 2 == 0:  # 홀수층 전담기 (인덱스 기준 홀수층 필터링)
+        odd_floors = [f for f in range(total_fs) if f <= idx_1f or (f - idx_1f) % 2 != 0]
+        oe_placements.append(int(np.random.choice(odd_floors)))
+    else:           # 짝수층 전담기 (인덱스 기준 짝수층 필터링)
+        even_floors = [f for f in range(total_fs) if f <= idx_1f or (f - idx_1f) % 2 == 0]
+        oe_placements.append(int(np.random.choice(even_floors)))
+strategies_config["홀짝수층 분리 운행"] = {"placements": oe_placements, "logic": "홀짝 운행"}
 
 # 3. 고층부/저층부 분할 배치
 mid_idx = (total_fs + idx_1f) // 2
@@ -104,9 +112,17 @@ grid_cols = st.columns(len(strategies_config))
 for idx, (s_name, config) in enumerate(strategies_config.items()):
     with grid_cols[idx]:
         st.markdown(f"**{s_name}**")
-        # [변경] '전략 미적용 (랜덤 운행)'일 때는 개별 엘리베이터 위치 텍스트 노출 안 함
+        
         if s_name == "전략 미적용 (랜덤 운행)":
-            st.info("특정 대기 위치 없음 (전 층 자유 랜덤 운행 상태)")
+            st.info("🔄 전 층 자유 랜덤 운행 상태 (특정 대기 위치 없음)")
+        
+        # [수정] 홀짝수층 분리 운행일 때 고정 층수가 아닌 전담 랜덤 구역 안내로 변경
+        elif s_name == "홀짝수층 분리 운행":
+            st.info("⚡ 전담 구역 내 개별 랜덤 운행")
+            for i in range(num_elevators):
+                type_label = "홀수층 전담" if i % 2 == 0 else "짝수층 전담"
+                st.caption(f"EL {chr(65+i)} : `{type_label} (유동 대기)`")
+                
         else:
             for i, pos in enumerate(config["placements"]):
                 st.caption(f"EL {chr(65+i)} : `{FLOOR_LABELS[pos]}`")
