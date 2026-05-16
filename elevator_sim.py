@@ -58,7 +58,7 @@ with c_custom:
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v4_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v5_{i}")
             manual_placements.append(val)
 
 st.divider()
@@ -104,8 +104,12 @@ grid_cols = st.columns(len(strategies_config))
 for idx, (s_name, config) in enumerate(strategies_config.items()):
     with grid_cols[idx]:
         st.markdown(f"**{s_name}**")
-        for i, pos in enumerate(config["placements"]):
-            st.caption(f"EL {chr(65+i)} : `{FLOOR_LABELS[pos]}`")
+        # [변경] '전략 미적용 (랜덤 운행)'일 때는 개별 엘리베이터 위치 텍스트 노출 안 함
+        if s_name == "전략 미적용 (랜덤 운행)":
+            st.info("특정 대기 위치 없음 (전 층 자유 랜덤 운행 상태)")
+        else:
+            for i, pos in enumerate(config["placements"]):
+                st.caption(f"EL {chr(65+i)} : `{FLOOR_LABELS[pos]}`")
 
 st.divider()
 
@@ -218,5 +222,3 @@ if st.button("🚀 전체 분석 및 개선 지표 산출 시작", type="primary
             ordered_cols.extend([col, f"{col} 변동량 (초)", f"{col} 효율 (%)"])
             
     st.dataframe(df_final_render[ordered_cols], use_container_width=True)
-    
-    # 종합 리포트 안내창(st.success) 블록이 요청에 따라 안전하게 삭제되었습니다.
