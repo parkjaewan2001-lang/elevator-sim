@@ -26,11 +26,23 @@ with st.sidebar:
     max_velocity = st.number_input("정격 속도 (m/s)", value=2.5)
     acceleration = st.number_input("가속도 (m/s²)", value=1.0)
     
-    base_door_time = st.number_input("기본 문 시간 (초)", value=7.0)
+    # [수정] 고정 기계 구동 시간과 전체 문 시간을 모두 변수화하여 입력받음
+    fixed_door_moving_time = st.number_input("고정 기계 작동 시간 (초) [열림+닫힘]", value=4.0, min_value=1.0, step=0.5)
+    base_door_time = st.number_input("기본 전체 문 시간 (초) [대기포함]", value=7.0, min_value=fixed_door_moving_time + 0.5, step=0.5)
     button_efficiency = st.slider("🔘 닫힘 버튼 효율 (%)", 0, 100, 40)
     
-    saved_door_time = base_door_time * (button_efficiency / 100)
-    st.info(f"💡 문 닫힘 버튼 클릭 시 층당 **{saved_door_time:.2f}초** 단축 효과")
+    # 가변 도어 타임라인 매커니즘 연산
+    pure_dwell_time = max(0.0, base_door_time - fixed_door_moving_time)
+    saved_door_time = pure_dwell_time * (button_efficiency / 100)
+    final_door_operating_time = base_door_time - saved_door_time
+    
+    st.info(f"""
+    ⚙️ **도어 메커니즘 실시간 프로파일링:**
+    * 하드웨어 한계 구동 시간: **{fixed_door_moving_time:.1f}초** (조작됨)
+    * 디폴트 승객 개방 대기 시간: **{pure_dwell_time:.1f}초**
+    * 닫힘 버튼 클릭 단축 이득: **-{saved_door_time:.2f}초**
+    * **최종 플랫폼 정지 시간: {final_door_operating_time:.2f}초**
+    """)
 
     st.divider()
     st.header("⚠️ 서비스 임계치 (SLA) 설정")
@@ -58,7 +70,7 @@ with c_custom:
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v6_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v8_{i}")
             manual_placements.append(val)
 
 st.divider()
@@ -70,13 +82,13 @@ np.random.seed(42)
 # 1. 전략 미적용 (전 층 무작위 랜덤 분산 상태 가정)
 strategies_config["전략 미적용 (랜덤 운행)"] = {"placements": list(np.random.randint(0, total_fs, num_elevators)), "logic": "자유 운행"}
 
-# 2. [수정] 홀짝수층 분리 운행 (각자의 전담 운행 구역 내에서 개별 랜덤 분산 위치 적용)
+# 2. 홀짝수층 분리 운행 (각자의 전담 운행 구역 내에서 개별 랜덤 분산 위치 적용)
 oe_placements = []
 for i in range(num_elevators):
-    if i % 2 == 0:  # 홀수층 전담기 (인덱스 기준 홀수층 필터링)
+    if i % 2 == 0:
         odd_floors = [f for f in range(total_fs) if f <= idx_1f or (f - idx_1f) % 2 != 0]
         oe_placements.append(int(np.random.choice(odd_floors)))
-    else:           # 짝수층 전담기 (인덱스 기준 짝수층 필터링)
+    else:
         even_floors = [f for f in range(total_fs) if f <= idx_1f or (f - idx_1f) % 2 == 0]
         oe_placements.append(int(np.random.choice(even_floors)))
 strategies_config["홀짝수층 분리 운행"] = {"placements": oe_placements, "logic": "홀짝 운행"}
@@ -116,7 +128,6 @@ for idx, (s_name, config) in enumerate(strategies_config.items()):
         if s_name == "전략 미적용 (랜덤 운행)":
             st.info("🔄 전 층 자유 랜덤 운행 상태 (특정 대기 위치 없음)")
         
-        # [수정] 홀짝수층 분리 운행일 때 고정 층수가 아닌 전담 랜덤 구역 안내로 변경
         elif s_name == "홀짝수층 분리 운행":
             st.info("⚡ 전담 구역 내 개별 랜덤 운행")
             for i in range(num_elevators):
@@ -136,7 +147,7 @@ def get_phys_time(dist_m, v_max, accel):
     if dist_m >= 2 * d_accel: return (2 * (v_max / accel)) + (dist_m - 2 * d_accel) / v_max
     return 2 * np.sqrt(dist_m / accel)
 
-def simulate_route(start, end, placements, logic, cong, is_deliv, eff, base_t, p_rate, s_floor, households):
+def simulate_route(start, end, placements, logic, cong, is_deliv, eff, base_t, fixed_t, p_rate, s_floor, households):
     if abs(start - end) <= s_floor and start >= idx_1f:
         return 5.0
 
@@ -159,7 +170,13 @@ def simulate_route(start, end, placements, logic, cong, is_deliv, eff, base_t, p
         wait_t = wait_t * (1 - (p_rate / 100) * 0.4)
     
     move_t = get_phys_time(abs(start - end) * floor_height, max_velocity, acceleration)
-    door_eff_t = base_t * (1 - (eff/100)) if start > idx_1f else base_t * 1.2
+    
+    # [수정] 조작 가능한 fixed_t 변수를 내부 시뮬레이션 공식에 바인딩
+    pure_dwell = max(0.0, base_t - fixed_t)
+    door_eff_t = fixed_t + (pure_dwell * (1 - (eff/100)))
+    
+    if start == idx_1f: 
+        door_eff_t = door_eff_t * 1.2
     
     return (wait_t + move_t + (door_eff_t * w)) * (1.3 if is_deliv else 1.0)
 
@@ -188,7 +205,7 @@ if st.button("🚀 전체 분석 및 개선 지표 산출 시작", type="primary
             
             calc_time = simulate_route(
                 start, end, config["placements"], config["logic"], 
-                congestion, delivery_mode, eff_param, base_door_time, 
+                congestion, delivery_mode, eff_param, base_door_time, fixed_door_moving_time,
                 p_rate_param, s_floor_param, households_per_floor
             )
             
