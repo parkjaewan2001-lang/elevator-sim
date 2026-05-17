@@ -28,8 +28,6 @@ with st.sidebar:
     
     fixed_door_moving_time = st.number_input("고정 기계 작동 시간 (초) [열림+닫힘]", value=4.0, min_value=1.0, step=0.5)
     base_door_time = st.number_input("기본 전체 문 시간 (초) [대기포함]", value=7.0, min_value=fixed_door_moving_time + 0.5, step=0.5)
-    
-    # [수정] 슬라이더(slider)에서 숫자 입력 방식(number_input)으로 딱 이 부분만 변경했습니다.
     button_efficiency = st.number_input("🔘 닫힘 버튼 효율 (%)", value=40, min_value=0, max_value=100, step=5)
     
     pure_dwell_time = max(0.0, base_door_time - fixed_door_moving_time)
@@ -61,7 +59,8 @@ c_time, c_custom = st.columns([1, 1])
 
 with c_time:
     st.write("##### ⏰ AI 최적화 시간대 기준")
-    mode_label = st.select_slider("시간대 패턴 선택", options=["새벽 시간", "출근 시간", "낮 시간", "퇴근 시간"], value="출근 시간")
+    # [수정] select_slider(슬라이더)에서 radio(버튼 선택식)로 딱 이 부분만 변경했습니다.
+    mode_label = st.radio("시간대 패턴 선택", options=["새벽 시간", "출근 시간", "낮 시간", "퇴근 시간"], index=1, horizontal=True)
     current_is_deliv = True if mode_label == "새벽 시간" else False
 
 with c_custom:
@@ -70,7 +69,7 @@ with c_custom:
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v10_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v11_{i}")
             manual_placements.append(val)
 
 st.divider()
