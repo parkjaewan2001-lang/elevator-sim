@@ -59,7 +59,6 @@ c_time, c_custom = st.columns([1, 1])
 
 with c_time:
     st.write("##### ⏰ AI 최적화 시간대 기준")
-    # [수정] 공백 시간 제거를 위해 "새벽 시간" 범위를 06시까지로 연장하고, "낮 시간"의 시작점도 매끄럽게 연결했습니다.
     time_options = [
         "새벽 시간 (00시~06시)", 
         "출근 시간 (07시~09시)", 
@@ -78,7 +77,7 @@ with c_custom:
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v14_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v15_{i}")
             manual_placements.append(val)
 
 st.divider()
@@ -173,8 +172,16 @@ def simulate_route(start, end, placements, logic, cong, is_deliv, eff, base_t, f
     if abs(start - end) <= s_floor and start >= idx_1f:
         return 5.0
 
+    # [수정] 5단계 혼잡도 가중치 매핑 구조 반영
+    congestion_weights = {
+        "매우 쾌적": 0.7, 
+        "쾌적": 0.9, 
+        "보통": 1.1, 
+        "혼잡": 1.8, 
+        "매우 혼잡": 2.5
+    }
     h_weight = 1.0 + (households - 1) * 0.05
-    w = {"매우 쾌적": 0.7, "보통": 1.1, "매우 혼잡": 2.5}[cong] * h_weight
+    w = congestion_weights[cong] * h_weight
     
     avail = [i for i in range(num_elevators)]
     
@@ -206,8 +213,18 @@ def simulate_route(start, end, placements, logic, cong, is_deliv, eff, base_t, f
 # ----------------- [5] 통합 실행 및 대조 분석 -----------------
 st.subheader("🌐 멀티 매트릭스 시뮬레이션 가동")
 c_env1, c_env2 = st.columns(2)
-with c_env1: congestion = st.select_slider("건물 내부 혼잡도", options=["매우 쾌적", "보통", "매우 혼잡"], value="보통")
-with c_env2: delivery_mode = st.toggle("📦 배송 지연 패널티 반영", value=current_is_deliv)
+
+with c_env1: 
+    # [수정] select_slider에서 5개 분기를 지원하는 수평형 radio 버튼식으로 변경했습니다.
+    congestion = st.radio(
+        "건물 내부 혼잡도 세부 선택", 
+        options=["매우 쾌적", "쾌적", "보통", "혼잡", "매우 혼잡"], 
+        index=2, 
+        horizontal=True
+    )
+    
+with c_env2: 
+    delivery_mode = st.toggle("📦 배송 지연 패널티 반영", value=current_is_deliv)
 
 if st.button("🚀 전체 분석 및 개선 지표 산출 시작", type="primary", use_container_width=True):
     avg_res_f = int(idx_1f + (max_f - 1) * 0.7)
