@@ -59,8 +59,8 @@ c_time, c_custom = st.columns([1, 1])
 
 with c_time:
     st.write("##### ⏰ AI 최적화 시간대 기준")
-    # [수정] select_slider(슬라이더)에서 radio(버튼 선택식)로 딱 이 부분만 변경했습니다.
-    mode_label = st.radio("시간대 패턴 선택", options=["새벽 시간", "출근 시간", "낮 시간", "퇴근 시간"], index=1, horizontal=True)
+    # [수정] 옵션에 "저녁 시간"을 새롭게 추가했습니다.
+    mode_label = st.radio("시간대 패턴 선택", options=["새벽 시간", "출근 시간", "낮 시간", "퇴근 시간", "저녁 시간"], index=1, horizontal=True)
     current_is_deliv = True if mode_label == "새벽 시간" else False
 
 with c_custom:
@@ -69,7 +69,7 @@ with c_custom:
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v11_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v12_{i}")
             manual_placements.append(val)
 
 st.divider()
@@ -102,7 +102,7 @@ else:
     split_placements = [int(idx_1f + (mid_idx-idx_1f)/2) if i < num_elevators/2 else int(mid_idx + (total_fs-mid_idx)/2) for i in range(num_elevators)]
 strategies_config["고층부/저층부 분할배치"] = {"placements": split_placements, "logic": "분할 배치"}
 
-# 4. AI 자동 최적화 배치
+# 4. AI 자동 최적화 배치 (새로운 저녁 시간 분산 로직 포함)
 if mode_label == "새벽 시간":
     ai_pos = [idx_1f] * (num_elevators // 2) + [0] * (num_elevators - num_elevators // 2) if num_elevators > 1 else [idx_1f]
 elif mode_label == "출근 시간":
@@ -112,6 +112,15 @@ elif mode_label == "출근 시간":
 elif mode_label == "퇴근 시간":
     p_count = int(round(num_elevators * (parking_usage_rate / 100)))
     ai_pos = [0] * p_count + [idx_1f] * (num_elevators - p_count)
+elif mode_label == "저녁 시간":
+    # [신규 로직] 상/하행 복합 혼재 대응: 절반은 기점(1층) 대기, 절반은 거주층 하부(1/3 지점)에 분산하여 외출 수요 스크리닝
+    lower_mid_f = int(idx_1f + (total_fs - idx_1f) * 0.3)
+    ai_pos = []
+    for i in range(num_elevators):
+        if i % 2 == 0:
+            ai_pos.append(idx_1f) # 1층 로비 홀딩
+        else:
+            ai_pos.append(lower_mid_f) # 거주층 하부 대기
 else:
     ai_pos = [int(f) for f in np.linspace(0, total_fs - 1, num_elevators)]
 strategies_config[f"AI 자동 최적화 ({mode_label})"] = {"placements": ai_pos, "logic": "자유 운행"}
