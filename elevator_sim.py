@@ -15,7 +15,6 @@ with st.sidebar:
     with c1: max_f = st.number_input("지상 최고층", value=30, step=1)
     with c2: min_f = st.number_input("지하 최저층", value=5, step=1)
     
-    # [수정] 최소값을 2에서 1로 변경
     num_elevators = st.number_input("엘리베이터 개수", value=2, min_value=1, max_value=10)
     households_per_floor = st.number_input("층당 세대수 (가구)", value=4, min_value=1)
     stairs_floor = st.number_input("계단 이용 권장 층수", value=3, min_value=0, max_value=max_f)
@@ -29,7 +28,9 @@ with st.sidebar:
     
     fixed_door_moving_time = st.number_input("고정 기계 작동 시간 (초) [열림+닫힘]", value=4.0, min_value=1.0, step=0.5)
     base_door_time = st.number_input("기본 전체 문 시간 (초) [대기포함]", value=7.0, min_value=fixed_door_moving_time + 0.5, step=0.5)
-    button_efficiency = st.slider("🔘 닫힘 버튼 효율 (%)", 0, 100, 40)
+    
+    # [수정] 슬라이더(slider)에서 숫자 입력 방식(number_input)으로 딱 이 부분만 변경했습니다.
+    button_efficiency = st.number_input("🔘 닫힘 버튼 효율 (%)", value=40, min_value=0, max_value=100, step=5)
     
     pure_dwell_time = max(0.0, base_door_time - fixed_door_moving_time)
     saved_door_time = pure_dwell_time * (button_efficiency / 100)
@@ -69,7 +70,7 @@ with c_custom:
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v9_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v10_{i}")
             manual_placements.append(val)
 
 st.divider()
@@ -81,7 +82,7 @@ np.random.seed(42)
 # 1. 전략 미적용 (전 층 무작위 랜덤 분산 상태 가정)
 strategies_config["전략 미적용 (랜덤 운행)"] = {"placements": list(np.random.randint(0, total_fs, num_elevators)), "logic": "자유 운행"}
 
-# 2. 홀짝수층 분리 운행 (1대일 때의 예외 방어 로직 반영)
+# 2. 홀짝수층 분리 운행
 oe_placements = []
 for i in range(num_elevators):
     if num_elevators == 1:
@@ -94,7 +95,7 @@ for i in range(num_elevators):
         oe_placements.append(int(np.random.choice(even_floors)))
 strategies_config["홀짝수층 분리 운행"] = {"placements": oe_placements, "logic": "홀짝 운행"}
 
-# 3. 고층부/저층부 분할 배치 (1대일 때 예외 방어 로직 반영)
+# 3. 고층부/저층부 분할 배치
 mid_idx = (total_fs + idx_1f) // 2
 if num_elevators == 1:
     split_placements = [mid_idx]
@@ -102,7 +103,7 @@ else:
     split_placements = [int(idx_1f + (mid_idx-idx_1f)/2) if i < num_elevators/2 else int(mid_idx + (total_fs-mid_idx)/2) for i in range(num_elevators)]
 strategies_config["고층부/저층부 분할배치"] = {"placements": split_placements, "logic": "분할 배치"}
 
-# 4. AI 자동 최적화 배치 (수동 배치값 완전 배제)
+# 4. AI 자동 최적화 배치
 if mode_label == "새벽 시간":
     ai_pos = [idx_1f] * (num_elevators // 2) + [0] * (num_elevators - num_elevators // 2) if num_elevators > 1 else [idx_1f]
 elif mode_label == "출근 시간":
@@ -116,7 +117,7 @@ else:
     ai_pos = [int(f) for f in np.linspace(0, total_fs - 1, num_elevators)]
 strategies_config[f"AI 자동 최적화 ({mode_label})"] = {"placements": ai_pos, "logic": "자유 운행"}
 
-# 5. 사용자 수동 배치 (AI 최적화 로직 완전 배제)
+# 5. 사용자 수동 배치
 strategies_config["사용자 수동 배치"] = {"placements": manual_placements, "logic": "자유 운행"}
 
 
@@ -161,7 +162,6 @@ def simulate_route(start, end, placements, logic, cong, is_deliv, eff, base_t, f
     
     avail = [i for i in range(num_elevators)]
     
-    # 엘리베이터가 2대 이상일 때만 분할 운행 규칙 처리 적용
     if num_elevators > 1:
         if "홀짝" in logic:
             avail = [i for i in avail if start <= idx_1f or (i % 2 == 0 and start % 2 != 0) or (i % 2 != 0 and start % 2 == 0)]
