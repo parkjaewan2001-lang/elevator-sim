@@ -77,17 +77,21 @@ with c_custom:
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v16_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v17_{i}")
             manual_placements.append(val)
 
 st.divider()
 
-# --- 각 전략별 독립 배치 계산 ---
+# --- 각 전략별 독립 배치 계산 및 매커니즘 설명 정의 ---
 strategies_config = {}
 np.random.seed(42) 
 
-# 1. 전략 미적용 (전 층 무작위 랜덤 분산 상태 가정)
-strategies_config["전략 미적용 (랜덤 운행)"] = {"placements": list(np.random.randint(0, total_fs, num_elevators)), "logic": "자유 운행"}
+# 1. 전략 미적용
+strategies_config["전략 미적용 (랜덤 운행)"] = {
+    "placements": list(np.random.randint(0, total_fs, num_elevators)), 
+    "logic": "자유 운행",
+    "desc": "알고리즘 없이 이전 운행이 끝난 층에 무작위로 방치되는 상태입니다. 비교 기준점(Baseline) 역할을 합니다."
+}
 
 # 2. 홀짝수층 분리 운행
 oe_placements = []
@@ -100,7 +104,11 @@ for i in range(num_elevators):
     else:
         even_floors = [f for f in range(total_fs) if f <= idx_1f or (f - idx_1f) % 2 == 0]
         oe_placements.append(int(np.random.choice(even_floors)))
-strategies_config["홀짝수층 분리 운행"] = {"placements": oe_placements, "logic": "홀짝 운행"}
+strategies_config["홀짝수층 분리 운행"] = {
+    "placements": oe_placements, 
+    "logic": "홀짝 운행",
+    "desc": "엘리베이터별로 홀수층과 짝수층을 전담하여 정차 횟수를 절반으로 줄이고 동력 효율을 높이는 전통적 방식입니다."
+}
 
 # 3. 고층부/저층부 분할 배치
 mid_idx = (total_fs + idx_1f) // 2
@@ -108,18 +116,29 @@ if num_elevators == 1:
     split_placements = [mid_idx]
 else:
     split_placements = [int(idx_1f + (mid_idx-idx_1f)/2) if i < num_elevators/2 else int(mid_idx + (total_fs-mid_idx)/2) for i in range(num_elevators)]
-strategies_config["고층부/저층부 분할배치"] = {"placements": split_placements, "logic": "분할 배치"}
+strategies_config["고층부/저층부 분할배치"] = {
+    "placements": split_placements, 
+    "logic": "분할 배치",
+    "desc": "건물 수직 반경을 하부와 상부 구역으로 쪼개어 대기합니다. 장거리 이동 병목 현상을 방어하기에 유리합니다."
+}
 
-# [신규 추가] 4. 베이스 스테이션 집중 로직 (호출 종료 후 무조건 1층 로비 복귀 대기)
-strategies_config["베이스 스테이션 집중"] = {"placements": [idx_1f] * num_elevators, "logic": "자유 운행"}
+# 4. 베이스 스테이션 집중
+strategies_config["베이스 스테이션 집중"] = {
+    "placements": [idx_1f] * num_elevators, 
+    "logic": "자유 운행",
+    "desc": "운행이 끝나면 무조건 메인 로비(1층)로 강제 복귀합니다. 외부 입주민 유입이 압도적인 패턴에 특화되어 있습니다."
+}
 
-# [신규 추가] 5. 동적 간격 배치 로직 (호출이 없을 때 전체 건물에 등간격 수평 분산)
+# 5. 동적 간격 배치
 if num_elevators == 1:
     spacing_placements = [mid_idx]
 else:
-    # 전체 층 인덱스 범위를 대수대로 균등하게 분할하여 센터 포인트를 배치
     spacing_placements = [int(f) for f in np.linspace(0, total_fs - 1, num_elevators)]
-strategies_config["동적 간격 배치"] = {"placements": spacing_placements, "logic": "자유 운행"}
+strategies_config["동적 간격 배치"] = {
+    "placements": spacing_placements, 
+    "logic": "자유 운행",
+    "desc": "차량 간 뭉침 현상(Bunching)을 예방하기 위해 전체 가용 층수를 대수대로 등간격 분산시켜 촘촘히 대기합니다."
+}
 
 # 6. AI 자동 최적화 배치
 if mode_label == "새벽 시간":
@@ -141,34 +160,41 @@ elif mode_label == "저녁 시간":
             ai_pos.append(lower_mid_f)
 else:
     ai_pos = [int(f) for f in np.linspace(0, total_fs - 1, num_elevators)]
-strategies_config[f"AI 자동 최적화 ({mode_label})"] = {"placements": ai_pos, "logic": "자유 운행"}
+
+strategies_config[f"AI 자동 최적화 ({mode_label})"] = {
+    "placements": ai_pos, 
+    "logic": "자유 운행",
+    "desc": f"선택된 '{mode_label}' 유동인구 통계를 분석하여, 상/하행 실시간 예상 컴포넌트 길목에 유동 배정하는 지능형 로직입니다."
+}
 
 # 7. 사용자 수동 배치
-strategies_config["사용자 수동 배치"] = {"placements": manual_placements, "logic": "자유 운행"}
+strategies_config["사용자 수동 배치"] = {
+    "placements": manual_placements, 
+    "logic": "자유 운행",
+    "desc": "상단 슬롯에서 연구원(사용자)이 임의로 정의한 고정 층수에 수동 스탠바이시키는 직관적 제어 모드입니다."
+}
 
 
-# --- 배치 현황 그리드 대시보드 표시 ---
-st.write("### 📍 각 운영 전략별 엘리베이터 시뮬레이션 초기 위치 지도")
+# --- [수정] 배치 현황 및 로직 설명 그리드 표시 ---
+st.write("### 📍 각 운영 전략별 엘리베이터 시뮬레이션 초기 위치 지도 및 로직 가이드")
 grid_cols = st.columns(len(strategies_config))
 for idx, (s_name, config) in enumerate(strategies_config.items()):
     with grid_cols[idx]:
         st.markdown(f"**{s_name}**")
         
+        # 층수 가시화 바인딩
         if s_name == "전략 미적용 (랜덤 운행)":
-            st.info("🔄 전 층 자유 랜덤 운행 상태 (특정 대기 위치 없음)")
-        
-        elif s_name == "홀짝수층 분리 운행":
-            if num_elevators == 1:
-                st.warning("⚠️ 1대로는 홀짝 분리 불가")
-            else:
-                st.info("⚡ 전담 구역 내 개별 랜덤 운행")
-                for i in range(num_elevators):
-                    type_label = "홀수층 전담" if i % 2 == 0 else "짝수층 전담"
-                    st.caption(f"EL {chr(65+i)} : `{type_label}`")
-                
+            st.info("🔄 전 층 자유 랜덤 분산 운행")
+        elif s_name == "홀짝수층 분리 운행" and num_elevators > 1:
+            st.info("⚡ 전담 구역 내 가변 대기")
+            for i in range(num_elevators):
+                st.caption(f"EL {chr(65+i)} : `{'홀수' if i % 2 == 0 else '짝수'}층 전담`")
         else:
             for i, pos in enumerate(config["placements"]):
                 st.caption(f"EL {chr(65+i)} : `{FLOOR_LABELS[pos]}`")
+                
+        # [추가] 각 로직의 원리와 의미를 명확히 이해할 수 있도록 주석창 추가
+        st.caption(f"💡 {config['desc']}")
 
 st.divider()
 
@@ -248,7 +274,6 @@ if st.button("🚀 전체 분석 및 개선 지표 산출 시작", type="primary
     
     for s_name, (start, end, limit) in scenarios.items():
         for strat_name, config in strategies_config.items():
-            # 타 시스템 변조 패러메터 표준화
             eff_param = button_efficiency if strat_name != "전략 미적용 (랜덤 운행)" else 0
             p_rate_param = parking_usage_rate if strat_name != "전략 미적용 (랜덤 운행)" else 0
             s_floor_param = stairs_floor if strat_name != "전략 미적용 (랜덤 운행)" else 0
