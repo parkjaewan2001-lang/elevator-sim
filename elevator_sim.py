@@ -77,7 +77,7 @@ with c_custom:
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v15_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_matrix_v16_{i}")
             manual_placements.append(val)
 
 st.divider()
@@ -110,7 +110,18 @@ else:
     split_placements = [int(idx_1f + (mid_idx-idx_1f)/2) if i < num_elevators/2 else int(mid_idx + (total_fs-mid_idx)/2) for i in range(num_elevators)]
 strategies_config["고층부/저층부 분할배치"] = {"placements": split_placements, "logic": "분할 배치"}
 
-# 4. AI 자동 최적화 배치
+# [신규 추가] 4. 베이스 스테이션 집중 로직 (호출 종료 후 무조건 1층 로비 복귀 대기)
+strategies_config["베이스 스테이션 집중"] = {"placements": [idx_1f] * num_elevators, "logic": "자유 운행"}
+
+# [신규 추가] 5. 동적 간격 배치 로직 (호출이 없을 때 전체 건물에 등간격 수평 분산)
+if num_elevators == 1:
+    spacing_placements = [mid_idx]
+else:
+    # 전체 층 인덱스 범위를 대수대로 균등하게 분할하여 센터 포인트를 배치
+    spacing_placements = [int(f) for f in np.linspace(0, total_fs - 1, num_elevators)]
+strategies_config["동적 간격 배치"] = {"placements": spacing_placements, "logic": "자유 운행"}
+
+# 6. AI 자동 최적화 배치
 if mode_label == "새벽 시간":
     ai_pos = [idx_1f] * (num_elevators // 2) + [0] * (num_elevators - num_elevators // 2) if num_elevators > 1 else [idx_1f]
 elif mode_label == "출근 시간":
@@ -132,12 +143,12 @@ else:
     ai_pos = [int(f) for f in np.linspace(0, total_fs - 1, num_elevators)]
 strategies_config[f"AI 자동 최적화 ({mode_label})"] = {"placements": ai_pos, "logic": "자유 운행"}
 
-# 5. 사용자 수동 배치
+# 7. 사용자 수동 배치
 strategies_config["사용자 수동 배치"] = {"placements": manual_placements, "logic": "자유 운행"}
 
 
 # --- 배치 현황 그리드 대시보드 표시 ---
-st.write("### 📍 각 전략별 엘리베이터 시뮬레이션 초기 위치 지도")
+st.write("### 📍 각 운영 전략별 엘리베이터 시뮬레이션 초기 위치 지도")
 grid_cols = st.columns(len(strategies_config))
 for idx, (s_name, config) in enumerate(strategies_config.items()):
     with grid_cols[idx]:
@@ -148,12 +159,12 @@ for idx, (s_name, config) in enumerate(strategies_config.items()):
         
         elif s_name == "홀짝수층 분리 운행":
             if num_elevators == 1:
-                st.warning("⚠️ 1대로는 홀짝 분리 불가 (전 층 랜덤 운행)")
+                st.warning("⚠️ 1대로는 홀짝 분리 불가")
             else:
                 st.info("⚡ 전담 구역 내 개별 랜덤 운행")
                 for i in range(num_elevators):
                     type_label = "홀수층 전담" if i % 2 == 0 else "짝수층 전담"
-                    st.caption(f"EL {chr(65+i)} : `{type_label} (유동 대기)`")
+                    st.caption(f"EL {chr(65+i)} : `{type_label}`")
                 
         else:
             for i, pos in enumerate(config["placements"]):
@@ -172,7 +183,6 @@ def simulate_route(start, end, placements, logic, cong, is_deliv, eff, base_t, f
     if abs(start - end) <= s_floor and start >= idx_1f:
         return 5.0
 
-    # [수정] 5단계 혼잡도 가중치 매핑 구조 반영
     congestion_weights = {
         "매우 쾌적": 0.7, 
         "쾌적": 0.9, 
@@ -215,7 +225,6 @@ st.subheader("🌐 멀티 매트릭스 시뮬레이션 가동")
 c_env1, c_env2 = st.columns(2)
 
 with c_env1: 
-    # [수정] select_slider에서 5개 분기를 지원하는 수평형 radio 버튼식으로 변경했습니다.
     congestion = st.radio(
         "건물 내부 혼잡도 세부 선택", 
         options=["매우 쾌적", "쾌적", "보통", "혼잡", "매우 혼잡"], 
@@ -239,6 +248,7 @@ if st.button("🚀 전체 분석 및 개선 지표 산출 시작", type="primary
     
     for s_name, (start, end, limit) in scenarios.items():
         for strat_name, config in strategies_config.items():
+            # 타 시스템 변조 패러메터 표준화
             eff_param = button_efficiency if strat_name != "전략 미적용 (랜덤 운행)" else 0
             p_rate_param = parking_usage_rate if strat_name != "전략 미적용 (랜덤 운행)" else 0
             s_floor_param = stairs_floor if strat_name != "전략 미적용 (랜덤 운행)" else 0
