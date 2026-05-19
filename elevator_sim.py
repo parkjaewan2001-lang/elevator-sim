@@ -6,11 +6,12 @@ import altair as alt
 # ----------------- [1] UI 및 페이지 전역 설정 -----------------
 st.set_page_config(page_title="Elevator ESG & SLA Lab", layout="wide")
 st.title("🏢 Elevator Strategic, ESG & SLA Experiment Lab")
-st.subheader("⚡ 동선별 개별 타임라인 및 SLA 달성률 매트릭스 정밀 추적 시스템")
+st.subheader("⚡ 동선별 타임라인·SLA 달성률 및 에너지/탄소 배출 통합 추적 시스템")
 
 st.markdown("""
 > 💡 **Simulation Methodology (연구 방법론):**
-> * **개별 동선 추적:** 4개 동선(1층↔거주층, 주차장↔거주층)의 실시간 소요 시간과 개별 SLA 달성률(0% 또는 100%)을 분리하여 모니터링합니다.
+> * **개별 동선 추적:** 4개 동선(1층↔거주층, 주차장↔거주층)의 실시간 소요 시간과 개별 SLA 달성률(0% 또는 100%)을 정밀 모니터링합니다.
+> * **ESG 통합 지표:** 각 전략별 총 전력 소비량(kWh), KEPCO 차등 요금 기반 전기 요금(원), 탄소 배출 발자국(g CO₂)을 산출합니다.
 > * **배달 패널티 연동:** 배달 모드 활성화 시 라이더의 다중 분할 정차(가속 부하 2.4배) 및 도어 홀딩(대기 전력 1.8배) 물리 법칙이 적용됩니다.
 """)
 
@@ -81,7 +82,7 @@ with c_custom:
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_gran_matrix_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_esg_matrix_{i}")
             manual_placements.append(val)
 
 st.divider()
@@ -211,7 +212,7 @@ with c_env1:
 with c_env2: 
     delivery_mode = st.toggle("📦 배달 패널티 활성화", value=current_is_deliv)
 
-if st.button("🚀 동선별 SLA 정밀 시뮬레이션 가동", type="primary", use_container_width=True):
+if st.button("🚀 동선별 SLA & ESG 통합 시뮬레이션 가동", type="primary", use_container_width=True):
     avg_res_f = int(idx_1f + (max_f - 1) * 0.7)
     
     scenarios = {
@@ -236,41 +237,39 @@ if st.button("🚀 동선별 SLA 정밀 시뮬레이션 가동", type="primary",
             )
             
             sla_diff = calc_time - target_sla
-            is_sla_pass = 100.0 if sla_diff <= 0 else 0.0 # 개별 동선은 패스(100%) 아니면 실패(0%)
+            is_sla_pass = 100.0 if sla_diff <= 0 else 0.0
             sla_excess = max(0.0, sla_diff) 
             
             calc_cost = calc_kwh * kepco_rate
+            calc_carbon = calc_kwh * 424.0 # 한국 전력 탄소 배출 계수 표준 가중치
             
             matrix_results.append({
                 "운영 전략": strat_name,
                 "동선 시나리오": s_name,
                 "실제 소요시간": calc_time,
-                "목표 SLA": target_sla,
                 "SLA 초과(초)": sla_excess,
                 "SLA 달성률": is_sla_pass,
-                "전기 요금(원)": calc_cost
+                "전력 소비량(kWh)": calc_kwh,
+                "전기 요금(원)": calc_cost,
+                "탄소 배출량(g)": calc_carbon
             })
             
     df_matrix = pd.DataFrame(matrix_results)
     
-    # 📈 동선별 정밀 데이터 가독성 정제
+    # 📈 [1] 동선별 정밀 스코어보드 (Pivot 형태 빌드)
     st.write("### 📈 [동선별 정밀 스코어보드] 운영 전략 × 시나리오 매트릭스")
     
-    # 사용자가 보기 편하게 테이블 재구성 (Pivot 형태)
     final_rows = []
     for strat_name in strategies_config.keys():
         strat_df = df_matrix[df_matrix["운영 전략"] == strat_name]
-        
         row_data = {"운영 전략": strat_name}
         
-        # 4개 동선을 돌며 시간과 %를 한 셀에 합쳐서 표기하거나 분리
         for _, row in strat_df.iterrows():
             scen = row["동선 시나리오"]
             time_v = row["실제 소요시간"]
             pass_v = row["SLA 달성률"]
             excess_v = row["SLA 초과(초)"]
             
-            # 셀 안에 가독성 좋게 텍스트 포맷팅
             status_icon = "⭕" if pass_v == 100.0 else f"❌ (+{excess_v:.1f}초)"
             row_data[f"{scen} (소요시간)"] = f"{time_v:.1f}초"
             row_data[f"{scen} (달성률)"] = f"{pass_v:.0f}% ({status_icon})"
@@ -278,8 +277,6 @@ if st.button("🚀 동선별 SLA 정밀 시뮬레이션 가동", type="primary",
         final_rows.append(row_data)
         
     df_pivot = pd.DataFrame(final_rows).set_index("운영 전략")
-    
-    # 동선별 컬럼 순서 정렬
     ordered_cols = [
         "1층 ⬆️ 거주층 (소요시간)", "1층 ⬆️ 거주층 (달성률)",
         "거주층 ⬇️ 1층 (소요시간)", "거주층 ⬇️ 1층 (달성률)",
@@ -288,14 +285,43 @@ if st.button("🚀 동선별 SLA 정밀 시뮬레이션 가동", type="primary",
     ]
     st.dataframe(df_pivot[ordered_cols], use_container_width=True)
     
-    # 📊 시각화 보조 차트 (동선별 SLA 초과 현황)
-    st.write("### 📊 동선별 실시간 데드라인 초과 폭 비교")
-    sla_chart = alt.Chart(df_matrix).mark_bar().encode(
-        x=alt.X('동선 시나리오:N', axis=alt.Axis(title="시나리오 노선")),
-        y=alt.Y('실제 소요시간:Q', title='소요 시간 (초)'),
-        color='운영 전략:N',
-        column='운영 전략:N'
-    ).properties(width=150, height=220)
-    st.altair_chart(sla_chart)
+    # 🌿 [2] ESG 환경 부하 스코어보드 (누적 에너지, 전기요금, 탄소배출 통합)
+    st.write("### 🌿 [ESG 친환경 부하 분석] 전략별 누적 에너지 및 탄소 배출 비교")
     
-    st.info("💡 **결과 해석 팁:** 특정 동선에서 `0% (❌ +11.7초)` 형태로 표시되는 것은 해당 동선의 목표 SLA 기준치를 넘겼다는 뜻입니다. 왜 홀짝수층 배치가 전체 평균 지연 속에서도 25%를 방어했는지 그 정답이 위 표에 명확하게 분리되어 나타납니다.")
+    df_esg_summary = df_matrix.groupby("운영 전략").agg({
+        "전력 소비량(kWh)": "sum",
+        "전기 요금(원)": "sum",
+        "탄소 배출량(g)": "sum"
+    }).reset_index()
+    
+    base_row = df_esg_summary[df_esg_summary["운영 전략"] == "전략 미적용 (랜덤 운행)"].iloc[0]
+    
+    esg_rows = []
+    for _, row in df_esg_summary.iterrows():
+        strat = row["운영 전략"]
+        kwh_v = row["전력 소비량(kWh)"]
+        cost_v = row["전기 요금(원)"]
+        co2_v = row["탄소 배출량(g)"]
+        
+        cost_diff_pct = ((cost_v - base_row["전기 요금(원)"]) / base_row["전기 요금(원)"]) * 100
+        
+        esg_rows.append({
+            "운영 전략": strat,
+            "총 전력 소비량": f"{kwh_v:.4f} kWh",
+            "총 예상 전기요금": f"{cost_v:.1f} 원",
+            "공동 관리비 절감율(%)": f"{cost_diff_pct:+.1f}%",
+            "누적 탄소 배출 발자국": f"{co2_v:.1f} g CO₂"
+        })
+        
+    st.dataframe(pd.DataFrame(esg_rows).set_index("운영 전략"), use_container_width=True)
+
+    # 📊 [3] 시각화 사이드 차트 (탄소 배출량 직관 비교)
+    st.write("### 📉 전략별 누적 탄소 배출 발자국 (g CO₂) 시각화")
+    co2_chart = alt.Chart(df_matrix).mark_bar().encode(
+        x=alt.X('운영 전략:N', axis=alt.Axis(labelAngle=-45), title="운영 전략"),
+        y=alt.Y('sum(탄소 배출량(g)):Q', title='총 탄소 배출량 (g CO₂)'),
+        color='운영 전략:N'
+    ).properties(width=600, height=300)
+    st.altair_chart(co2_chart, use_container_width=True)
+    
+    st.success("🏁 데이터 융합 완료: 상단 테이블에서는 동선별 딜레이와 패스 여부(%)를, 하단 테이블에서는 그로 인해 누적된 전력(kWh), 요금(원), 탄소(g)를 완벽히 대조하여 감상할 수 있습니다.")
