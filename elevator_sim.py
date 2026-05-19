@@ -12,7 +12,7 @@ st.markdown("""
 > 💡 **Simulation Methodology (연구 방법론):**
 > * **ESG 엔지니어링:** 기어리스 동기모터(VVVF, 효율 85%) 및 KEPCO 차등 요금제 기준 표준 물리 모델 탑재.
 > * **SLA 거버넌스:** 설정된 서비스 임계치(SLA) 대비 초과 시간 및 달성률(%)을 실시간 역산하여 알고리즘의 신뢰성 검증.
-> * **현실적 변수:** 큰 짐(유모차/카트) 유입 시 공간 점유량($Volume=4$) 및 도어 제어 지연, 가속 피크 전력이 동적 반영됩니다.
+> * **배달 패널티 연동:** 배달 모드 활성화 시 라이더의 **다중 분할 정차(가속 부하 고배율 증가)** 및 **도어 홀딩(대기 전력 누수)** 변수가 물리 엔진에 직접 반영됩니다.
 """)
 
 # ----------------- [2] SIDEBAR: 설정 변수 -----------------
@@ -89,7 +89,7 @@ with c_custom:
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_sla_matrix_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_delivery_matrix_{i}")
             manual_placements.append(val)
 
 st.divider()
@@ -110,7 +110,7 @@ for i in range(num_elevators):
     else:
         even_floors = [f for f in range(total_fs) if f <= idx_1f or (f - idx_1f) % 2 == 0]
         oe_placements.append(int(np.random.choice(even_floors)))
-strategies_config["홀짝수층 분리 운행"] = {"placements": oe_placements, "logic": "홀짝 운행", "desc": "홀/짝수층 전담 정차로 감속 손실 방지"}
+strategies_config["홀짝수층 분리 운행"] = {"placements": oe_placements, "logic": "ोत्तम 운행", "desc": "홀/짝수층 전담 정차로 감속 손실 방지"}
 
 mid_idx = (total_fs + idx_1f) // 2
 if num_elevators == 1:
@@ -176,19 +176,18 @@ def get_phys_time(dist_m, v_max, accel):
     return 2 * np.sqrt(dist_m / accel)
 
 def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, base_t, fixed_t, p_rate, s_floor, households):
-    # 계단 사용 범위 내 공차 처리
     if abs(start - end) <= s_floor and start >= idx_1f:
-        return 5.0, 0.001, True # 계단 이동은 무조건 SLA 패스(True) 처리
+        return 5.0, 0.001
     
     congestion_weights = {"매우 쾌적": 0.7, "쾌적": 0.9, "보통": 1.1, "혼잡": 1.8, "매우 혼잡": 2.5}
     h_weight = 1.0 + (households - 1) * 0.05
     w = congestion_weights[cong] * h_weight
     
-    # 📦 큰 짐(유모차/카트)에 의한 가속 구간 및 도어 홀딩 물리 연동 가중치
+    # 🛵 [SLA & ESG 연동 핵심] 배달 패널티 활성화 시 물리 법칙 변화 변수
     if is_deliv:
-        w = w * 1.5
-        delivery_stops_penalty = 2.4  # 다중 분할 정차로 인한 가속 부하 2.4배
-        door_holding_penalty = 1.8    # 도어 개방 대기 전력 누수 1.8배
+        w = w * 1.5                   # 라이더 유입으로 도어 대기 혼잡도 증가
+        delivery_stops_penalty = 2.4  # 🗺️ 라이더 다중 분할 정차로 인한 모터 가속 부하 증가 (2.4배)
+        door_holding_penalty = 1.8    # 🚪 문 강제 붙잡기로 인한 제어반 전력 누수 증가 (1.8배)
     else:
         delivery_stops_penalty = 1.0
         door_holding_penalty = 1.0
@@ -224,14 +223,18 @@ def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, b
     if start == idx_1f: 
         door_eff_t = door_eff_t * 1.2
         
+    # 배달 모드일 경우 라이더 동선 지연으로 소요 시간 1.3배 추가 패널티
     final_time = (wait_t + move_t + (door_eff_t * w)) * (1.3 if is_deliv else 1.0)
     
-    # ⚡ 표준 에너지 공식 연산
+    # ⚡ [ESG 엔진 고도화] 물리적 배달 패널티가 전력량 공식에 직접 결합
     total_moving_dist = min_dist_m + move_dist_m
     moving_time_pure = get_phys_time(total_moving_dist, max_velocity, acceleration)
     
+    # 모터 구동 주행 전력에 다중 정차 가중치 곱 연산
     energy_move = ((500 * 9.8 * max_velocity * moving_time_pure) / (0.85 * 3600 * 1000)) * delivery_stops_penalty
+    # 도어 개방 전력에 홀딩 가중치 곱 연산
     energy_door = 0.001 * w * door_holding_penalty
+    
     total_kwh = energy_move + energy_door
     
     return final_time, total_kwh
@@ -242,12 +245,11 @@ c_env1, c_env2 = st.columns(2)
 with c_env1: 
     congestion = st.radio("건물 내부 혼잡도 세부 선택", options=["매우 쾌적", "쾌적", "보통", "혼잡", "매우 혼잡"], index=2, horizontal=True)
 with c_env2: 
-    delivery_mode = st.toggle("📦 유모차 / 큰 짐 승객 유입 패널티 반영", value=current_is_deliv)
+    delivery_mode = st.toggle("📦 배달 패널티 활성화 (시간 지연 및 전력 폭발 연동)", value=current_is_deliv)
 
 if st.button("🚀 전체 ESG & SLA 분석 통합 시뮬레이션 가동", type="primary", use_container_width=True):
     avg_res_f = int(idx_1f + (max_f - 1) * 0.7)
     
-    # 시나리오 노선 명칭과 실제 연동 타깃 SLA 변수 바인딩
     scenarios = {
         "1층 ⬆️ 거주층": (idx_1f, avg_res_f, lim_1f_up),
         "거주층 ⬇️ 1층": (avg_res_f, idx_1f, lim_res_1f),
@@ -269,10 +271,10 @@ if st.button("🚀 전체 ESG & SLA 분석 통합 시뮬레이션 가동", type=
                 p_rate_param, s_floor_param, households_per_floor
             )
             
-            # SLA 오차 계산 메커니즘
+            # SLA 오차 연산 메커니즘
             sla_diff = calc_time - target_sla
             is_sla_pass = 1 if sla_diff <= 0 else 0
-            sla_excess = max(0.0, sla_diff) # SLA를 지켰다면 초과 시간은 0초
+            sla_excess = max(0.0, sla_diff) 
             
             calc_cost = calc_kwh * kepco_rate
             calc_carbon = calc_kwh * 424.0
@@ -291,12 +293,12 @@ if st.button("🚀 전체 ESG & SLA 분석 통합 시뮬레이션 가동", type=
             
     df_matrix = pd.DataFrame(matrix_results)
     
-    # 1. 시각화 섹션 (SLA 초과 정밀 시각화 추가)
+    # 1. 시각화 섹션
     st.write("### 📊 [SLA & ESG 차트 리포트]")
     c_chart1, c_chart2 = st.columns(2)
     
     with c_chart1:
-        st.caption("🚨 설정된 목표 SLA 대비 각 전략별 평균 초과 시간 (낮을수록 우수, 0초가 목표)")
+        st.caption("🚨 설정된 목표 SLA 대비 각 전략별 평균 초과 시간 (0초가 완벽 만족)")
         sla_chart = alt.Chart(df_matrix).mark_bar().encode(
             x=alt.X('운영 전략:N', axis=alt.Axis(labelAngle=-45)),
             y=alt.Y('SLA 초과(초):Q', title='초과 시간 (초)'),
@@ -315,13 +317,13 @@ if st.button("🚀 전체 ESG & SLA 분석 통합 시뮬레이션 가동", type=
         ).properties(width=500, height=300).interactive()
         st.altair_chart(cost_chart, use_container_width=True)
 
-    # 2. 종합 스코어보드 집계 및 출력 (SLA 필드 통합)
-    st.write("### 📈 통합 종합 스코어 보드 (SLA 정밀 추적 필드 포함)")
+    # 2. 종합 스코어보드 집계 및 출력
+    st.write("### 📈 통합 종합 스코어 보드 (SLA 정밀 추적 및 배달 물리 변수 반영)")
     
     df_summary = df_matrix.groupby("운영 전략").agg({
         "소요 시간(초)": "mean",
         "SLA 초과(초)": "mean",
-        "SLA 만족여부": "mean", # 만족 빈도의 평균 = 즉, 달성 백분율(%)
+        "SLA 만족여부": "mean", 
         "전력 소비량(kWh)": "sum",
         "전기 요금(원)": "sum",
         "탄소 배출량(g)": "sum"
@@ -344,7 +346,7 @@ if st.button("🚀 전체 ESG & SLA 분석 통합 시뮬레이션 가동", type=
         final_rows.append({
             "운영 전략": strat,
             "평균 소요시간": f"{time_v:.1f}초",
-            "평균 SLA 초과시간": f"+{excess_v:.1f}초" if excess_v > 0 else "0.0초 (완벽 만족)",
+            "평균 SLA 초과시간": f"+{excess_v:.1f}초" if excess_v > 0 else "0.0초 (SLA 통과)",
             "SLA 보장 달성률": f"{pass_rate_v:.1f}%",
             "총 전력 사용량": f"{kwh_v:.4f} kWh",
             "예상 전기요금": f"{cost_v:.1f} 원",
@@ -354,4 +356,4 @@ if st.button("🚀 전체 ESG & SLA 분석 통합 시뮬레이션 가동", type=
         
     st.dataframe(pd.DataFrame(final_rows).set_index("운영 전략"), use_container_width=True)
     
-    st.success("🏁 시뮬레이션 최종 스코어 산출 완료: 좌측 사이드바에서 설정한 목표 SLA 대비 '평균 초과 시간'과 '최종 달성 확률(%)'을 수식 기반으로 정밀 도출했습니다.")
+    st.success("🏁 시뮬레이션 완료: '배달 패널티' 토글을 작동하면 라이더의 다중 분할 정차와 도어 제어로 인해 시간 지연뿐만 아니라 전력량과 KEPCO 전기요금이 동시에 폭발하며 SLA 달성률이 급감하는 현상이 수학적으로 실증됩니다.")
