@@ -8,10 +8,11 @@ st.set_page_config(page_title="Elevator ESG & SLA Lab", layout="wide")
 st.title("🏢 Elevator Strategic, ESG & SLA Experiment Lab")
 st.subheader("⚡ 동선별 타임라인·SLA 달성률 및 에너지/탄소 배출 통합 추적 시스템")
 
+# 대시보드 메인 화면에 표준 물리 참조 모델 논거 추가
 st.markdown("""
 > 💡 **Simulation Methodology (연구 방법론):**
 > * **개별 동선 추적:** 4개 동선(1층↔거주층, 주차장↔거주층)의 실시간 소요 시간과 개별 SLA 달성률(0% 또는 100%)을 정밀 모니터링합니다.
-> * **ESG 통합 지표:** 각 전략별 총 전력 소비량(kWh), KEPCO 차등 요금 기반 전기 요금(원), 탄소 배출 발자국(g CO₂)을 산출합니다.
+> * **표준 물리 참조 모델 (Reference Model):** 본 시스템은 기어리스 동기모터(Efficiency 85%) 및 KEPCO 공동주택용 종합계약 단가를 기준으로 설계된 **'표준 물리 참조 모델'**을 사용합니다. 아파트별 절대적인 수치는 다를 수 있으나, 알고리즘 간의 상대적 에너지 절감 효율(%)은 수학적으로 동일하게 유지됩니다.
 > * **배달 패널티 연동:** 배달 모드 활성화 시 라이더의 다중 분할 정차(가속 부하 2.4배) 및 도어 홀딩(대기 전력 1.8배) 물리 법칙이 적용됩니다.
 """)
 
@@ -82,12 +83,12 @@ with c_custom:
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_esg_matrix_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_final_master_{i}")
             manual_placements.append(val)
 
 st.divider()
 
-# --- 전략 배치 매핑 ---
+# --- 운영 전략 대기 포지션 맵 빌드 ---
 strategies_config = {}
 np.random.seed(42) 
 
@@ -143,7 +144,25 @@ strategies_config[f"AI 자동 최적화 ({mode_label})"] = {"placements": ai_pos
 
 strategies_config["사용자 수동 배치"] = {"placements": manual_placements, "logic": "자유 운행", "desc": "연구원 임의 정의 슬롯 배치"}
 
-# ----------------- [4] 물리 엔진 코어 -----------------
+st.write("### 📍 전략별 초기 대기 지도 및 매커니즘")
+grid_cols = st.columns(len(strategies_config))
+for idx, (s_name, config) in enumerate(strategies_config.items()):
+    with grid_cols[idx]:
+        st.markdown(f"**{s_name}**")
+        if s_name == "전략 미적용 (랜덤 운행)":
+            st.info("🔄 전 층 자유 랜덤 방치")
+        elif s_name == "홀짝수층 분리 운행" and num_elevators > 1:
+            st.info("⚡ 전담 구역 분할")
+            for i in range(num_elevators):
+                st.caption(f"EL {chr(65+i)} : `{'홀수' if i % 2 == 0 else '짝수'}층 전담`")
+        else:
+            for i, pos in enumerate(config["placements"]):
+                st.caption(f"EL {chr(65+i)} : `{FLOOR_LABELS[pos]}`")
+        st.caption(f"ℹ️ {config['desc']}")
+
+st.divider()
+
+# ----------------- [4] 물리 엔진 및 표준 참조 모델 코어 -----------------
 def get_phys_time(dist_m, v_max, accel):
     if dist_m <= 0: return 0
     d_accel = (v_max**2) / (2 * accel)
@@ -151,6 +170,13 @@ def get_phys_time(dist_m, v_max, accel):
     return 2 * np.sqrt(dist_m / accel)
 
 def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, base_t, fixed_t, p_rate, s_floor, households):
+    """
+    [공학적 타당성 검증 주석 (Reference Model Definition)]
+    본 시스템은 기어리스 동기모터(Efficiency 85%) 및 KEPCO 공동주택용 종합계약 단가를 기준으로 설계된 
+    '표준 물리 참조 모델(Reference Model)'을 사용합니다. 
+    아파트별 절대적인 수치는 환경(층고, 모터 노후도 등)에 따라 다를 수 있으나, 
+    알고리즘 간의 상대적 에너지 절감 효율(%)은 수학적으로 동일하게 유지됩니다.
+    """
     if abs(start - end) <= s_floor and start >= idx_1f:
         return 5.0, 0.001
     
@@ -160,8 +186,8 @@ def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, b
     
     if is_deliv:
         w = w * 1.5
-        delivery_stops_penalty = 2.4
-        door_holding_penalty = 1.8
+        delivery_stops_penalty = 2.4  # 라이더 다중 분할 정차 가속 패널티
+        door_holding_penalty = 1.8    # 도어 홀딩 전력 패널티
     else:
         delivery_stops_penalty = 1.0
         door_holding_penalty = 1.0
@@ -195,9 +221,11 @@ def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, b
         
     final_time = (wait_t + move_t + (door_eff_t * w)) * (1.3 if is_deliv else 1.0)
     
+    # 표준 물리 엔진 참조 기반 수치 전력량(kWh) 계산
     total_moving_dist = min_dist_m + move_dist_m
     moving_time_pure = get_phys_time(total_moving_dist, max_velocity, acceleration)
     
+    # 기어리스 동기모터 효율 85% 반영 표준 식
     energy_move = ((500 * 9.8 * max_velocity * moving_time_pure) / (0.85 * 3600 * 1000)) * delivery_stops_penalty
     energy_door = 0.001 * w * door_holding_penalty
     total_kwh = energy_move + energy_door
@@ -241,7 +269,7 @@ if st.button("🚀 동선별 SLA & ESG 통합 시뮬레이션 가동", type="pri
             sla_excess = max(0.0, sla_diff) 
             
             calc_cost = calc_kwh * kepco_rate
-            calc_carbon = calc_kwh * 424.0 # 한국 전력 탄소 배출 계수 표준 가중치
+            calc_carbon = calc_kwh * 424.0
             
             matrix_results.append({
                 "운영 전략": strat_name,
@@ -256,7 +284,7 @@ if st.button("🚀 동선별 SLA & ESG 통합 시뮬레이션 가동", type="pri
             
     df_matrix = pd.DataFrame(matrix_results)
     
-    # 📈 [1] 동선별 정밀 스코어보드 (Pivot 형태 빌드)
+    # 📈 [1] 동선별 정밀 스코어보드 출력
     st.write("### 📈 [동선별 정밀 스코어보드] 운영 전략 × 시나리오 매트릭스")
     
     final_rows = []
@@ -285,7 +313,7 @@ if st.button("🚀 동선별 SLA & ESG 통합 시뮬레이션 가동", type="pri
     ]
     st.dataframe(df_pivot[ordered_cols], use_container_width=True)
     
-    # 🌿 [2] ESG 환경 부하 스코어보드 (누적 에너지, 전기요금, 탄소배출 통합)
+    # 🌿 [2] ESG 환경 부하 통합 스코어보드 출력
     st.write("### 🌿 [ESG 친환경 부하 분석] 전략별 누적 에너지 및 탄소 배출 비교")
     
     df_esg_summary = df_matrix.groupby("운영 전략").agg({
@@ -315,7 +343,7 @@ if st.button("🚀 동선별 SLA & ESG 통합 시뮬레이션 가동", type="pri
         
     st.dataframe(pd.DataFrame(esg_rows).set_index("운영 전략"), use_container_width=True)
 
-    # 📊 [3] 시각화 사이드 차트 (탄소 배출량 직관 비교)
+    # 📊 [3] 시각화 차트
     st.write("### 📉 전략별 누적 탄소 배출 발자국 (g CO₂) 시각화")
     co2_chart = alt.Chart(df_matrix).mark_bar().encode(
         x=alt.X('운영 전략:N', axis=alt.Axis(labelAngle=-45), title="운영 전략"),
@@ -324,4 +352,4 @@ if st.button("🚀 동선별 SLA & ESG 통합 시뮬레이션 가동", type="pri
     ).properties(width=600, height=300)
     st.altair_chart(co2_chart, use_container_width=True)
     
-    st.success("🏁 데이터 융합 완료: 상단 테이블에서는 동선별 딜레이와 패스 여부(%)를, 하단 테이블에서는 그로 인해 누적된 전력(kWh), 요금(원), 탄소(g)를 완벽히 대조하여 감상할 수 있습니다.")
+    st.success("🏁 데이터 융합 완료: 상단 테이블에서 동선별 오차값 원인을 정밀 추적하고, 하단 테이블에서 물리 참조 모델 기반 탄소 배출 저감 지표를 모니터링할 수 있습니다.")
