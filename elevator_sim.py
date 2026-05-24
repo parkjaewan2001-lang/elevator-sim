@@ -27,6 +27,15 @@ with st.sidebar:
     stairs_floor = st.number_input("계단 이용 권장 층수", value=3, min_value=0, max_value=max_f)
     parking_usage_rate = st.number_input("🚗 주차장 이용 비율 (%)", value=30, min_value=0, max_value=100, step=5)
 
+    # 🟢 [추가 기능] 타겟 인프라 대조용 회생제동 ON/OFF 스위치
+    st.divider()
+    st.header("🌱 ESG 하드웨어 옵션")
+    regen_enabled = st.toggle(
+        "🔄 회생제동(Regen) 인버터 활성화", 
+        value=True, 
+        help="끄면 회생전력이 발전되지 않고 열로 방출되는 구축 아파트 상태가 됩니다."
+    )
+
     st.divider()
     st.header("🚀 물리 엔진 설정")
     floor_height = st.number_input("층간 높이 (m)", value=3.0)
@@ -150,7 +159,8 @@ def get_phys_time(dist_m, v_max, accel):
     if dist_m >= 2 * d_accel: return (2 * (v_max / accel)) + (dist_m - 2 * d_accel) / v_max
     return 2 * np.sqrt(dist_m / accel)
 
-def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, base_t, fixed_t, p_rate, s_floor, households):
+# 인자값 맨 끝에 회생제동 스위치 상태를 전달받도록 바인딩
+def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, base_t, fixed_t, p_rate, s_floor, households, is_regen_on):
     if abs(start - end) <= s_floor and start >= idx_1f:
         return 5.0, 0.001
     
@@ -199,17 +209,24 @@ def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, b
     moving_time_pure = get_phys_time(total_moving_dist, max_velocity, acceleration)
     energy_move_base = ((500 * 9.8 * max_velocity * moving_time_pure) / (0.85 * 3600 * 1000)) * delivery_stops_penalty
     
-    # 회생제동 인버터 제어 물리 공식
+    # 회생제동 인버터 제어 가변형 물리 공식
     is_upward = (end > start)
     is_heavy_load = (w >= 1.2 or is_deliv)
     
     regen_factor = 1.0
-    if is_upward and not is_heavy_load:
-        regen_factor = -0.35  # 상행 공차 자가발전
-    elif not is_upward and is_heavy_load:
-        regen_factor = -0.40  # 하행 만차 자가발전
-    elif is_upward and is_heavy_load:
-        regen_factor = 1.30
+    if is_regen_on:
+        if is_upward and not is_heavy_load:
+            regen_factor = -0.35  # 상행 공차 자가발전 상쇄
+        elif not is_upward and is_heavy_load:
+            regen_factor = -0.40  # 하행 만차 자가발전 상쇄
+        elif is_upward and is_heavy_load:
+            regen_factor = 1.30
+    else:
+        # 회생제동 미동작(OFF) 시: 에너지를 발전하지 못하고 상행 부하 시의 전력 계수 가중치만 패널티로 적용
+        if is_upward and is_heavy_load:
+            regen_factor = 1.30
+        else:
+            regen_factor = 1.05
         
     energy_move_final = energy_move_base * regen_factor
     energy_door = 0.001 * w * door_holding_penalty
@@ -224,6 +241,10 @@ with c_env1:
     congestion = st.radio("건물 내부 혼잡도 세부 선택", options=["매우 쾌적", "쾌적", "보통", "혼잡", "매우 혼잡"], index=2, horizontal=True)
 with c_env2: 
     delivery_mode = st.toggle("📦 배달 패널티 활성화", value=current_is_deliv)
+
+# 현재 회생제동 하드웨어 작동 상태 인프라 알림 상태창
+infra_badge = "🟢 회생제동 인버터 활성화 모드 (신축형)" if regen_enabled else "🔴 회생제동 인버터 비활성화 모드 (구축형)"
+st.info(f"현재 물리 엔진 타겟 상태: **{infra_badge}**")
 
 if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 산출", type="primary", use_container_width=True):
     avg_res_f = int(idx_1f + (max_f - 1) * 0.7)
@@ -243,10 +264,11 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
             p_rate_param = parking_usage_rate if strat_name != "전략 미적용 (랜덤 운행)" else 0
             s_floor_param = stairs_floor if strat_name != "전략 미적용 (랜덤 운행)" else 0
             
+            # 🟢 대조를 위해 사이드바의 토글 변수(regen_enabled)를 코어 함수에 주입
             calc_time, calc_kwh = simulate_route_esg_sla(
                 start, end, config["placements"], config["logic"], 
                 congestion, delivery_mode, eff_param, base_door_time, fixed_door_moving_time,
-                p_rate_param, s_floor_param, households_per_floor
+                p_rate_param, s_floor_param, households_per_floor, regen_enabled
             )
             
             sla_diff = calc_time - target_sla
@@ -270,7 +292,7 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
             
     df_matrix = pd.DataFrame(matrix_results)
     
-    # 📈 [1] 테이블 출력: 동선별 정밀 스코어보드 (상대 오차 % 비교 로직 주입)
+    # 📈 [1] 테이블 출력: 동선별 정밀 스코어보드
     st.write("### 📈 [동선별 정밀 스코어보드] 운영 전략 × 시나리오 매트릭스 (% 대조)")
     
     final_rows = []
@@ -284,7 +306,6 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
             pass_v = row["SLA 달성률"]
             excess_v = row["SLA 초과(초)"]
             
-            # 기준점인 '전략 미적용 (랜덤 운행)'의 동일 시나리오 시간 추출
             base_time = df_matrix[(df_matrix["운영 전략"] == "전략 미적용 (랜덤 운행)") & (df_matrix["동선 시나리오"] == scen)]["실제 소요시간"].values[0]
             time_diff_pct = ((time_v - base_time) / base_time) * 100
             
@@ -305,8 +326,8 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
     ]
     st.dataframe(df_pivot[ordered_cols], use_container_width=True)
     
-    # 🌿 [2] 테이블 출력: ESG 환경 부하 통합 스코어보드 (항목별 절감율 % 컬럼 세분화)
-    st.write("### 🌿 [ESG 친환경 부하 분석] 전략별 누적 에너지 및 탄소 배출 비교 (회생제동 가동)")
+    # 🌿 [2] 테이블 출력: ESG 환경 부하 통합 스코어보드
+    st.write(f"### 🌿 [ESG 친환경 부하 분석] 전략별 누적 에너지 및 탄소 배출 비교 ({'회생제동 ON' if regen_enabled else '회생제동 OFF'})")
     df_esg_summary = df_matrix.groupby("운영 전략").agg({
         "전력 소비량(kWh)": "sum",
         "전기 요금(원)": "sum",
