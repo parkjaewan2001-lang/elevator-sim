@@ -11,8 +11,8 @@ st.subheader("⚡ 동선별 타임라인·SLA 달성률 및 구축/신축 대조
 st.markdown("""
 > 💡 **Simulation Methodology (연구 방법론):**
 > * **개별 동선 추적:** 4개 동선(1층↔거주층, 주차장↔거주층)의 실시간 소요 시간과 개별 SLA 달성률(0% 또는 100%)을 정밀 모니터링합니다.
-> * **구축 vs 신축 하드웨어 모의 (ON/OFF 토글):** 사이드바의 `회생제동 인버터 활성화` 스위치를 통해 현대식 **신축 아파트(ON)**의 자가발전 세이브 효과와 저항기 방열판으로 전력을 버리는 **구축 아파트(OFF)**의 에너지 효율 차이를 직관적으로 비교·검증할 수 있습니다.
-> * **대조 분석 기능:** 모든 운영 전략의 연산 결과는 기준점인 **'전략 미적용' 대비 증감률(%)**로 자동 환산되어 알고리즘의 우수성을 정량적으로 증명합니다.
+> * **구축 vs 신축 하드웨어 옵션:** 사이드바의 `회생제동 인버터 활성화` 토글을 통해 회생전력을 회수하는 **신축 아파트(ON)**와 열로 전력을 버리는 **구축 아파트(OFF)**의 에너지 차이를 대조할 수 있습니다.
+> * **대조 분석 기능:** 모든 결과는 기준점인 **'전략 미적용' 대비 증감률(%)**로 자동 계산됩니다.
 """)
 
 # ----------------- [2] SIDEBAR: 설정 변수 -----------------
@@ -29,7 +29,6 @@ with st.sidebar:
 
     st.divider()
     st.header("🌱 ESG 하드웨어 옵션")
-    # 🎛️ 구축 아파트 실험을 위한 회생제동 ON/OFF 토글 스위치 배치
     regen_enabled = st.toggle("🔄 회생제동(Regen) 인버터 활성화", value=True, help="OFF 시 회생전력이 발전되지 않고 열로 방출되는 구축 아파트 상태가 됩니다.")
 
     st.divider()
@@ -87,15 +86,13 @@ with c_custom:
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_regen_fixed_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_perfect_final_{i}")
             manual_placements.append(val)
 
 st.divider()
 
 # --- 운영 전략 대기 포지션 맵 빌드 ---
-# 에러 방지를 위해 기준이 되는 문자열을 고정 변수로 선언합니다.
 BASE_STRATEGY = "전략 미적용 (랜덤 운행)"
-
 strategies_config = {}
 np.random.seed(42) 
 
@@ -163,4 +160,72 @@ def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, b
         return 5.0, 0.001
     
     congestion_weights = {"매우 쾌적": 0.7, "쾌적": 0.9, "보통": 1.1, "혼잡": 1.8, "매우 혼잡": 2.5}
-    h_weight = 1.0 + (households - 1) * 0.0
+    h_weight = 1.0 + (households - 1) * 0.05
+    w = congestion_weights[cong] * h_weight
+    
+    if is_deliv:
+        w = w * 1.5
+        delivery_stops_penalty = 2.4
+        door_holding_penalty = 1.8
+    else:
+        delivery_stops_penalty = 1.0
+        door_holding_penalty = 1.0
+    
+    avail = [i for i in range(num_elevators)]
+    if num_elevators > 1:
+        if "홀짝" in logic:
+            avail = [i for i in avail if start <= idx_1f or (i % 2 == 0 and start % 2 != 0) or (i % 2 != 0 and start % 2 == 0)]
+        elif "분할" in logic:
+            mid = (total_fs + idx_1f) // 2
+            avail = [i for i in avail if start <= idx_1f or (i < num_elevators/2 and start <= mid) or (i >= num_elevators/2 and start > mid)]
+    if not avail: avail = [0]
+    
+    chosen_el_idx = avail[0]
+    min_dist_m = abs(placements[chosen_el_idx] - start) * floor_height
+    wait_t = get_phys_time(min_dist_m, max_velocity, acceleration)
+    
+    if logic == "베이스 스테이션 집중" and start != idx_1f:
+        min_dist_m += (abs(end - idx_1f) * floor_height) 
+
+    move_dist_m = abs(start - end) * floor_height
+    move_t = get_phys_time(move_dist_m, max_velocity, acceleration)
+    
+    if start < idx_1f or end < idx_1f:
+        wait_t = wait_t * (1 - (p_rate / 100) * 0.4)
+    
+    pure_dwell = max(0.0, base_t - fixed_t)
+    door_eff_t = fixed_t + (pure_dwell * (1 - (eff/100)))
+    if start == idx_1f: 
+        door_eff_t = door_eff_t * 1.2
+        
+    final_time = (wait_t + move_t + (door_eff_t * w)) * (1.3 if is_deliv else 1.0)
+    
+    total_moving_dist = min_dist_m + move_dist_m
+    moving_time_pure = get_phys_time(total_moving_dist, max_velocity, acceleration)
+    energy_move_base = ((500 * 9.8 * max_velocity * moving_time_pure) / (0.85 * 3600 * 1000)) * delivery_stops_penalty
+    
+    is_upward = (end > start)
+    is_heavy_load = (w >= 1.2 or is_deliv)
+    
+    regen_factor = 1.0
+    if is_regen_on:
+        if is_upward and not is_heavy_load:
+            regen_factor = -0.35
+        elif not is_upward and is_heavy_load:
+            regen_factor = -0.40
+        elif is_upward and is_heavy_load:
+            regen_factor = 1.30
+    else:
+        if is_upward and is_heavy_load:
+            regen_factor = 1.30
+        else:
+            regen_factor = 0.05
+        
+    energy_move_final = energy_move_base * regen_factor
+    energy_door = 0.001 * w * door_holding_penalty
+    total_kwh = energy_move_final + energy_door
+    
+    return final_time, total_kwh
+
+# ----------------- [5] 시뮬레이션 가동 및 매트릭스 도출 -----------------
+st.subheader("🌐 시뮬레이션
