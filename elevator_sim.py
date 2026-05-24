@@ -6,7 +6,10 @@ import altair as alt
 # ----------------- [1] UI 및 페이지 전역 설정 -----------------
 st.set_page_config(page_title="Elevator ESG & SLA Lab", layout="wide")
 st.title("🏢 Elevator Strategic, ESG & SLA Experiment Lab")
-st.subheader("⚡ 동선별 타임라인·SLA 달성률 및 구축/신축 대조용 회생제동 가변 추적 시스템")
+
+# 한글 문자열 깨짐 방지를 위한 변수 사전 정의
+SUB_HEADER_TEXT = "⚡ 동선별 타임라인·SLA 달성률 및 구축/신축 대조용 회생제동 가변 추적 시스템"
+st.subheader(SUB_HEADER_TEXT)
 
 st.markdown("""
 > 💡 **Simulation Methodology (연구 방법론):**
@@ -86,7 +89,7 @@ with c_custom:
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_perfect_final_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_final_fixed_v3_{i}")
             manual_placements.append(val)
 
 st.divider()
@@ -181,51 +184,4 @@ def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, b
     if not avail: avail = [0]
     
     chosen_el_idx = avail[0]
-    min_dist_m = abs(placements[chosen_el_idx] - start) * floor_height
-    wait_t = get_phys_time(min_dist_m, max_velocity, acceleration)
-    
-    if logic == "베이스 스테이션 집중" and start != idx_1f:
-        min_dist_m += (abs(end - idx_1f) * floor_height) 
-
-    move_dist_m = abs(start - end) * floor_height
-    move_t = get_phys_time(move_dist_m, max_velocity, acceleration)
-    
-    if start < idx_1f or end < idx_1f:
-        wait_t = wait_t * (1 - (p_rate / 100) * 0.4)
-    
-    pure_dwell = max(0.0, base_t - fixed_t)
-    door_eff_t = fixed_t + (pure_dwell * (1 - (eff/100)))
-    if start == idx_1f: 
-        door_eff_t = door_eff_t * 1.2
-        
-    final_time = (wait_t + move_t + (door_eff_t * w)) * (1.3 if is_deliv else 1.0)
-    
-    total_moving_dist = min_dist_m + move_dist_m
-    moving_time_pure = get_phys_time(total_moving_dist, max_velocity, acceleration)
-    energy_move_base = ((500 * 9.8 * max_velocity * moving_time_pure) / (0.85 * 3600 * 1000)) * delivery_stops_penalty
-    
-    is_upward = (end > start)
-    is_heavy_load = (w >= 1.2 or is_deliv)
-    
-    regen_factor = 1.0
-    if is_regen_on:
-        if is_upward and not is_heavy_load:
-            regen_factor = -0.35
-        elif not is_upward and is_heavy_load:
-            regen_factor = -0.40
-        elif is_upward and is_heavy_load:
-            regen_factor = 1.30
-    else:
-        if is_upward and is_heavy_load:
-            regen_factor = 1.30
-        else:
-            regen_factor = 0.05
-        
-    energy_move_final = energy_move_base * regen_factor
-    energy_door = 0.001 * w * door_holding_penalty
-    total_kwh = energy_move_final + energy_door
-    
-    return final_time, total_kwh
-
-# ----------------- [5] 시뮬레이션 가동 및 매트릭스 도출 -----------------
-st.subheader("🌐 시뮬레이션
+    min_
