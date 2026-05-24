@@ -12,7 +12,7 @@ st.markdown("""
 > 💡 **Simulation Methodology (연구 방법론):**
 > * **개별 동선 추적:** 4개 동선(1층↔거주층, 주차장↔거주층)의 실시간 소요 시간과 개별 SLA 달성률(0% 또는 100%)을 정밀 모니터링합니다.
 > * **구축 vs 신축 하드웨어 모의 (ON/OFF 토글):** 사이드바의 `회생제동 인버터 활성화` 스위치를 통해 현대식 **신축 아파트(ON)**의 자가발전 세이브 효과와 저항기 방열판으로 전력을 버리는 **구축 아파트(OFF)**의 에너지 효율 차이를 직관적으로 비교·검증할 수 있습니다.
-> * **대조 분석 기능:** 모든 운영 전략의 연산 결과는 기준점인 **'전략 미적용 (랜덤 운행)' 대비 증감률(%)**로 자동 환산되어 알고리즘의 우수성을 정량적으로 증명합니다.
+> * **대조 분석 기능:** 모든 운영 전략의 연산 결과는 기준점인 **'전략 미적용' 대비 증감률(%)**로 자동 환산되어 알고리즘의 우수성을 정량적으로 증명합니다.
 """)
 
 # ----------------- [2] SIDEBAR: 설정 변수 -----------------
@@ -87,16 +87,19 @@ with c_custom:
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_regen_toggle_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_regen_fixed_{i}")
             manual_placements.append(val)
 
 st.divider()
 
 # --- 운영 전략 대기 포지션 맵 빌드 ---
+# 에러 방지를 위해 기준이 되는 문자열을 고정 변수로 선언합니다.
+BASE_STRATEGY = "전략 미적용 (랜덤 운행)"
+
 strategies_config = {}
 np.random.seed(42) 
 
-strategies_config["전략 미적용 (랜덤 운행)"] = {"placements": list(np.random.randint(0, total_fs, num_elevators)), "logic": "자유 운행", "desc": "무작위 방치 상태"}
+strategies_config[BASE_STRATEGY] = {"placements": list(np.random.randint(0, total_fs, num_elevators)), "logic": "자유 운행", "desc": "무작위 방치 상태"}
 
 oe_placements = []
 for i in range(num_elevators):
@@ -160,102 +163,4 @@ def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, b
         return 5.0, 0.001
     
     congestion_weights = {"매우 쾌적": 0.7, "쾌적": 0.9, "보통": 1.1, "혼잡": 1.8, "매우 혼잡": 2.5}
-    h_weight = 1.0 + (households - 1) * 0.05
-    w = congestion_weights[cong] * h_weight
-    
-    if is_deliv:
-        w = w * 1.5
-        delivery_stops_penalty = 2.4
-        door_holding_penalty = 1.8
-    else:
-        delivery_stops_penalty = 1.0
-        door_holding_penalty = 1.0
-    
-    avail = [i for i in range(num_elevators)]
-    if num_elevators > 1:
-        if "홀짝" in logic:
-            avail = [i for i in avail if start <= idx_1f or (i % 2 == 0 and start % 2 != 0) or (i % 2 != 0 and start % 2 == 0)]
-        elif "분할" in logic:
-            mid = (total_fs + idx_1f) // 2
-            avail = [i for i in avail if start <= idx_1f or (i < num_elevators/2 and start <= mid) or (i >= num_elevators/2 and start > mid)]
-    if not avail: avail = [0]
-    
-    chosen_el_idx = avail[0]
-    min_dist_m = abs(placements[chosen_el_idx] - start) * floor_height
-    wait_t = get_phys_time(min_dist_m, max_velocity, acceleration)
-    
-    if logic == "베이스 스테이션 집중" and start != idx_1f:
-        min_dist_m += (abs(end - idx_1f) * floor_height) 
-
-    move_dist_m = abs(start - end) * floor_height
-    move_t = get_phys_time(move_dist_m, max_velocity, acceleration)
-    
-    if start < idx_1f or end < idx_1f:
-        wait_t = wait_t * (1 - (p_rate / 100) * 0.4)
-    
-    pure_dwell = max(0.0, base_t - fixed_t)
-    door_eff_t = fixed_t + (pure_dwell * (1 - (eff/100)))
-    if start == idx_1f: 
-        door_eff_t = door_eff_t * 1.2
-        
-    final_time = (wait_t + move_t + (door_eff_t * w)) * (1.3 if is_deliv else 1.0)
-    
-    # 기본 이동 물리 에너지 연산
-    total_moving_dist = min_dist_m + move_dist_m
-    moving_time_pure = get_phys_time(total_moving_dist, max_velocity, acceleration)
-    energy_move_base = ((500 * 9.8 * max_velocity * moving_time_pure) / (0.85 * 3600 * 1000)) * delivery_stops_penalty
-    
-    # 🔄 [회생제동 ON / OFF 가변 매트릭스 조건식]
-    is_upward = (end > start)
-    is_heavy_load = (w >= 1.2 or is_deliv)
-    
-    regen_factor = 1.0
-    if is_regen_on:
-        # 신축 아파트 모드 (회생전력 회수 반영)
-        if is_upward and not is_heavy_load:
-            regen_factor = -0.35  # 상행 공차 발전 자가회수
-        elif not is_upward and is_heavy_load:
-            regen_factor = -0.40  # 하행 만차 발전 자가회수
-        elif is_upward and is_heavy_load:
-            regen_factor = 1.30   # 부하 가속
-    else:
-        # 구축 아파트 모드 (저항 제동 방열 소멸)
-        # 자가발전(마이너스) 구간이 전부 0으로 마스킹되며, 순수 소모 구동력만 누적됨
-        if is_upward and is_heavy_load:
-            regen_factor = 1.30   # 부하 가속 소모
-        else:
-            regen_factor = 0.05   # 브레이크 작동 시 미세 대기 제어반 전력만 유지 (발전량은 열로 소멸)
-        
-    energy_move_final = energy_move_base * regen_factor
-    energy_door = 0.001 * w * door_holding_penalty
-    total_kwh = energy_move_final + energy_door
-    
-    return final_time, total_kwh
-
-# ----------------- [5] 통합 가동 및 동선별 매트릭스 도출 -----------------
-st.subheader("🌐 시뮬레이션 환경 조건 가동")
-c_env1, c_env2 = st.columns(2)
-with c_env1: 
-    congestion = st.radio("건물 내부 혼잡도 세부 선택", options=["매우 쾌적", "쾌적", "보통", "혼잡", "매우 혼잡"], index=2, horizontal=True)
-with c_env2: 
-    delivery_mode = st.toggle("📦 배달 패널티 활성화", value=current_is_deliv)
-
-# 상단에 가동 중인 하드웨어 인프라 상태 노출
-infra_badge = "🟢 신축 스마트 인프라 (회생제동 작동 중)" if regen_enabled else "🔴 구축 기존 인프라 (회생제동 미사용/저항제동)"
-st.info(f"현재 인프라 시뮬레이션 타겟: **{infra_badge}**")
-
-if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 산출", type="primary", use_container_width=True):
-    avg_res_f = int(idx_1f + (max_f - 1) * 0.7)
-    
-    scenarios = {
-        "1층 ⬆️ 거주층": (idx_1f, avg_res_f, lim_1f_up),
-        "거주층 ⬇️ 1층": (avg_res_f, idx_1f, lim_res_1f),
-        "주차장 ⬆️ 거주층": (0, avg_res_f, lim_p_up),
-        "거주층 ⬇️ 주차장": (avg_res_f, 0, lim_res_p)
-    }
-    
-    matrix_results = []
-    
-    for s_name, (start, end, target_sla) in scenarios.items():
-        for strat_name, config in strategies_config.items():
-            eff_param = button_efficiency if strat_name != "전략
+    h_weight = 1.0 + (households - 1) * 0.0
