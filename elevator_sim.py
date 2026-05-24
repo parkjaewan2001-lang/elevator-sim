@@ -119,7 +119,7 @@ with st.sidebar:
         step=5
     )
 
-    # ----------------- 회생제동 추가 -----------------
+    # ---------------- 회생제동 ----------------
 
     st.divider()
 
@@ -130,7 +130,7 @@ with st.sidebar:
         value=True
     )
 
-    # ------------------------------------------------
+    # ----------------------------------------
 
     st.divider()
 
@@ -160,7 +160,7 @@ with st.sidebar:
         min_value=10
     )
 
-# ----------------- [3] 층 정보 -----------------
+# ----------------- [3] MAIN -----------------
 
 FLOOR_LABELS = (
     [f"B{i}" for i in range(min_f, 0, -1)]
@@ -172,7 +172,72 @@ idx_1f = min_f
 
 total_fs = len(FLOOR_LABELS)
 
-# ----------------- [4] 전략 생성 -----------------
+# ----------------- 시간대 선택 유지 -----------------
+
+st.header("⚙️ 시뮬레이션 타임라인 및 수동 배치 설정")
+
+c_time, c_custom = st.columns([1, 1])
+
+with c_time:
+
+    st.write("##### ⏰ AI 최적화 및 한전 요금제 시간대 기준")
+
+    time_options = [
+        "새벽 시간 (00시~06시) [한전 경부하: 78원/kWh]",
+        "출근 시간 (07시~09시) [한전 최대부하: 195원/kWh]",
+        "낮 시간 (09시~18시) [한전 중부하: 132원/kWh]",
+        "퇴근 시간 (18시~20시) [한전 최대부하: 195원/kWh]",
+        "저녁 시간 (20시~23시) [한전 최대부하: 195원/kWh]"
+    ]
+
+    mode_selection = st.radio(
+        "시간대 패턴 선택",
+        options=time_options,
+        index=1,
+        horizontal=False
+    )
+
+    mode_label = mode_selection.split(" (")[0]
+
+    current_is_deliv = (
+        True if mode_label == "새벽 시간"
+        else False
+    )
+
+    if "경부하" in mode_selection:
+        kepco_rate = 78.0
+
+    elif "중부하" in mode_selection:
+        kepco_rate = 132.0
+
+    else:
+        kepco_rate = 195.0
+
+with c_custom:
+
+    st.write("##### ✍️ 사용자 수동 배치 설정")
+
+    m_cols = st.columns(num_elevators)
+
+    manual_placements = []
+
+    for i in range(num_elevators):
+
+        with m_cols[i]:
+
+            val = st.selectbox(
+                f"EL {chr(65+i)}",
+                options=range(total_fs),
+                format_func=lambda x: FLOOR_LABELS[x],
+                index=idx_1f,
+                key=f"manual_{i}"
+            )
+
+            manual_placements.append(val)
+
+st.divider()
+
+# ----------------- 전략 -----------------
 
 strategies_config = {}
 
@@ -206,7 +271,35 @@ strategies_config["동적 간격 배치"] = {
     "logic": "자유 운행"
 }
 
-# ----------------- [5] 물리 함수 -----------------
+strategies_config["사용자 수동 배치"] = {
+    "placements": manual_placements,
+    "logic": "자유 운행"
+}
+
+# ----------------- AI 시간대 전략 -----------------
+
+if mode_label == "새벽 시간":
+
+    ai_pos = [idx_1f] * num_elevators
+
+elif mode_label == "출근 시간":
+
+    ai_pos = [total_fs - 3] * num_elevators
+
+elif mode_label == "퇴근 시간":
+
+    ai_pos = [0] * num_elevators
+
+else:
+
+    ai_pos = [idx_1f] * num_elevators
+
+strategies_config[f"AI 자동 최적화 ({mode_label})"] = {
+    "placements": ai_pos,
+    "logic": "자유 운행"
+}
+
+# ----------------- 물리 엔진 -----------------
 
 def get_phys_time(dist_m, v_max, accel):
 
@@ -229,7 +322,7 @@ def get_phys_time(dist_m, v_max, accel):
 
     return 2 * np.sqrt(dist_m / accel)
 
-# ----------------- [6] 메인 시뮬레이션 -----------------
+# ----------------- 시뮬레이션 -----------------
 
 def simulate_route_esg_sla(
     start,
@@ -295,13 +388,9 @@ def simulate_route_esg_sla(
         (door_t * w)
     )
 
-    # ---------------- 에너지 계산 ----------------
+    # 에너지 계산
 
-    total_dist = (
-        wait_dist
-        +
-        move_dist
-    )
+    total_dist = wait_dist + move_dist
 
     moving_time = get_phys_time(
         total_dist,
@@ -333,16 +422,14 @@ def simulate_route_esg_sla(
 
     regen_factor = 1.0
 
-    # ---------------- 회생제동 ----------------
+    # 회생제동
 
     if regen_enabled:
 
-        # 상행 공차
         if is_upward and not is_heavy:
 
             regen_factor = -0.35
 
-        # 하행 만차
         elif (
             not is_upward
             and is_heavy
@@ -350,15 +437,12 @@ def simulate_route_esg_sla(
 
             regen_factor = -0.40
 
-        # 상행 만차
         elif (
             is_upward
             and is_heavy
         ):
 
             regen_factor = 1.30
-
-    # -----------------------------------------
 
     energy_final = (
         energy_base
@@ -369,22 +453,21 @@ def simulate_route_esg_sla(
 
     total_kwh = (
         energy_final
-        +
-        door_energy
+        + door_energy
     )
 
     return total_time, total_kwh
 
-# ----------------- [7] 환경 조건 -----------------
+# ----------------- 환경 -----------------
 
-st.header("🌐 시뮬레이션 환경 조건")
+st.subheader("🌐 시뮬레이션 환경 조건")
 
-c1, c2 = st.columns(2)
+c_env1, c_env2 = st.columns(2)
 
-with c1:
+with c_env1:
 
     congestion = st.radio(
-        "건물 내부 혼잡도",
+        "건물 내부 혼잡도 세부 선택",
         options=[
             "매우 쾌적",
             "쾌적",
@@ -392,27 +475,28 @@ with c1:
             "혼잡",
             "매우 혼잡"
         ],
+        index=2,
         horizontal=True
     )
 
-with c2:
+with c_env2:
 
     delivery_mode = st.toggle(
         "📦 배달 패널티 활성화",
-        value=False
+        value=current_is_deliv
     )
 
-# ----------------- [8] 실행 -----------------
+# ----------------- 실행 -----------------
 
 if st.button(
-    "🚀 시뮬레이션 실행",
+    "🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 산출",
+    type="primary",
     use_container_width=True
 ):
 
     avg_res_f = int(
         idx_1f
-        +
-        (max_f - 1) * 0.7
+        + (max_f - 1) * 0.7
     )
 
     scenarios = {
@@ -473,7 +557,7 @@ if st.button(
                 else 0
             )
 
-            cost = calc_kwh * 195
+            cost = calc_kwh * kepco_rate
 
             carbon = calc_kwh * 424
 
@@ -496,16 +580,12 @@ if st.button(
 
     df = pd.DataFrame(results)
 
-    # ---------------- 결과 테이블 ----------------
-
     st.write("### 📈 SLA 및 ESG 분석 결과")
 
     st.dataframe(
         df,
         use_container_width=True
     )
-
-    # ---------------- ESG 요약 ----------------
 
     st.write("### 🌿 ESG 전략별 총합")
 
@@ -525,8 +605,6 @@ if st.button(
         esg_df,
         use_container_width=True
     )
-
-    # ---------------- 그래프 ----------------
 
     st.write("### 📊 전략별 전력 소비량 비교")
 
@@ -551,8 +629,4 @@ if st.button(
     st.altair_chart(
         energy_chart,
         use_container_width=True
-    )
-
-    st.caption(
-        "💡 회생제동 ON 시 일부 구간에서 음수 소비전력(자가발전)이 발생할 수 있습니다."
     )
