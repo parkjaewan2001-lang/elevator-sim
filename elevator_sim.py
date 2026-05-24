@@ -7,7 +7,6 @@ import altair as alt
 st.set_page_config(page_title="Elevator ESG & SLA Lab", layout="wide")
 st.title("🏢 Elevator Strategic, ESG & SLA Experiment Lab")
 
-# 한글 문자열 깨짐 방지를 위한 변수 사전 정의
 SUB_HEADER_TEXT = "⚡ 동선별 타임라인·SLA 달성률 및 구축/신축 대조용 회생제동 가변 추적 시스템"
 st.subheader(SUB_HEADER_TEXT)
 
@@ -15,7 +14,7 @@ st.markdown("""
 > 💡 **Simulation Methodology (연구 방법론):**
 > * **개별 동선 추적:** 4개 동선(1층↔거주층, 주차장↔거주층)의 실시간 소요 시간과 개별 SLA 달성률(0% 또는 100%)을 정밀 모니터링합니다.
 > * **구축 vs 신축 하드웨어 옵션:** 사이드바의 `회생제동 인버터 활성화` 토글을 통해 회생전력을 회수하는 **신축 아파트(ON)**와 열로 전력을 버리는 **구축 아파트(OFF)**의 에너지 차이를 대조할 수 있습니다.
-> * **대조 분석 기능:** 모든 결과는 기준점인 **'전략 미적용' 대비 증감률(%)**로 자동 계산됩니다.
+> * **실행 상태 유지:** `session_state` 기술을 적용하여 버튼 클릭 시 데이터가 증발하지 않고 화면에 완벽히 고정됩니다.
 """)
 
 # ----------------- [2] SIDEBAR: 설정 변수 -----------------
@@ -89,7 +88,7 @@ with c_custom:
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_final_fixed_v3_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_state_fixed_{i}")
             manual_placements.append(val)
 
 st.divider()
@@ -184,4 +183,151 @@ def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, b
     if not avail: avail = [0]
     
     chosen_el_idx = avail[0]
-    min_
+    min_dist_m = abs(placements[chosen_el_idx] - start) * floor_height
+    wait_t = get_phys_time(min_dist_m, max_velocity, acceleration)
+    
+    if logic == "베이스 스테이션 집중" and start != idx_1f:
+        min_dist_m += (abs(end - idx_1f) * floor_height) 
+
+    move_dist_m = abs(start - end) * floor_height
+    move_t = get_phys_time(move_dist_m, max_velocity, acceleration)
+    
+    if start < idx_1f or end < idx_1f:
+        wait_t = wait_t * (1 - (p_rate / 100) * 0.4)
+    
+    pure_dwell = max(0.0, base_t - fixed_t)
+    door_eff_t = fixed_t + (pure_dwell * (1 - (eff/100)))
+    if start == idx_1f: 
+        door_eff_t = door_eff_t * 1.2
+        
+    final_time = (wait_t + move_t + (door_eff_t * w)) * (1.3 if is_deliv else 1.0)
+    
+    total_moving_dist = min_dist_m + move_dist_m
+    moving_time_pure = get_phys_time(total_moving_dist, max_velocity, acceleration)
+    energy_move_base = ((500 * 9.8 * max_velocity * moving_time_pure) / (0.85 * 3600 * 1000)) * delivery_stops_penalty
+    
+    is_upward = (end > start)
+    is_heavy_load = (w >= 1.2 or is_deliv)
+    
+    regen_factor = 1.0
+    if is_regen_on:
+        if is_upward and not is_heavy_load:
+            regen_factor = -0.35
+        elif not is_upward and is_heavy_load:
+            regen_factor = -0.40
+        elif is_upward and is_heavy_load:
+            regen_factor = 1.30
+    else:
+        if is_upward and is_heavy_load:
+            regen_factor = 1.30
+        else:
+            regen_factor = 0.05
+        
+    energy_move_final = energy_move_base * regen_factor
+    energy_door = 0.001 * w * door_holding_penalty
+    total_kwh = energy_move_final + energy_door
+    
+    return final_time, total_kwh
+
+# ----------------- [5] 시뮬레이션 가동 및 매트릭스 도출 -----------------
+RUN_HEADER = "🌐 시뮬레이션 환경 조건 가동"
+st.subheader(RUN_HEADER)
+
+c_env1, c_env2 = st.columns(2)
+with c_env1: 
+    congestion = st.radio("건물 내부 혼잡도 세부 선택", options=["매우 쾌적", "쾌적", "보통", "혼잡", "매우 혼잡"], index=2, horizontal=True)
+with c_env2: 
+    delivery_mode = st.toggle("📦 배달 패널티 활성화", value=current_is_deliv)
+
+infra_badge = "🟢 신축 스마트 인프라 (회생제동 작동 중)" if regen_enabled else "🔴 구축 기존 인프라 (회생제동 미사용/저항제동)"
+st.info(f"현재 인프라 시뮬레이션 타겟: **{infra_badge}**")
+
+# 🎛️ 핵심 해결책: Session State를 이용하여 연산 데이터 상태 보존 및 트리거 고정
+if 'sim_run' not in st.session_state:
+    st.session_state.sim_run = False
+if 'matrix_data' not in st.session_state:
+    st.session_state.matrix_data = None
+if 'esg_data' not in st.session_state:
+    st.session_state.esg_data = None
+
+if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 산출", type="primary", use_container_width=True):
+    avg_res_f = int(idx_1f + (max_f - 1) * 0.7)
+    
+    scenarios = {
+        "1층 ⬆️ 거주층": (idx_1f, avg_res_f, lim_1f_up),
+        "거주층 ⬇️ 1층": (avg_res_f, idx_1f, lim_res_1f),
+        "주차장 ⬆️ 거주층": (0, avg_res_f, lim_p_up),
+        "거주층 ⬇️ 주차장": (avg_res_f, 0, lim_res_p)
+    }
+    
+    matrix_results = []
+    
+    for s_name, (start, end, target_sla) in scenarios.items():
+        for strat_name, config in strategies_config.items():
+            is_base = (strat_name == BASE_STRATEGY)
+            eff_param = 0 if is_base else button_efficiency
+            p_rate_param = 0 if is_base else parking_usage_rate
+            s_floor_param = 0 if is_base else stairs_floor
+            
+            calc_time, calc_kwh = simulate_route_esg_sla(
+                start, end, config["placements"], config["logic"], 
+                congestion, delivery_mode, eff_param, base_door_time, fixed_door_moving_time,
+                p_rate_param, s_floor_param, households_per_floor, regen_enabled
+            )
+            
+            sla_diff = calc_time - target_sla
+            is_sla_pass = 100.0 if sla_diff <= 0 else 0.0
+            sla_excess = max(0.0, sla_diff) 
+            
+            calc_cost = calc_kwh * kepco_rate
+            calc_carbon = calc_kwh * 424.0
+            
+            matrix_results.append({
+                "운영 전략": strat_name,
+                "동선 시나리오": s_name,
+                "실제 소요시간": calc_time,
+                "목표 SLA": target_sla,
+                "SLA 초과(초)": sla_excess,
+                "SLA 달성률": is_sla_pass,
+                "전력 소비량(kWh)": calc_kwh,
+                "전기 요금(원)": calc_cost,
+                "탄소 배출량(g)": calc_carbon
+            })
+            
+    st.session_state.matrix_data = pd.DataFrame(matrix_results)
+    st.session_state.sim_run = True
+
+# ----------------- [6] 결과 렌더링 블록 (상태 유지됨) -----------------
+if st.session_state.sim_run and st.session_state.matrix_data is not None:
+    df_matrix = st.session_state.matrix_data
+    
+    # 📈 [1] 스코어보드 출력
+    st.write("### 📈 [동선별 정밀 스코어보드] 운영 전략 × 시나리오 매트릭스 (% 대조)")
+    final_rows = []
+    for strat_name in strategies_config.keys():
+        strat_df = df_matrix[df_matrix["운영 전략"] == strat_name]
+        row_data = {"운영 전략": strat_name}
+        
+        for _, row in strat_df.iterrows():
+            scen = row["동선 시나리오"]
+            time_v = row["실제 소요시간"]
+            pass_v = row["SLA 달성률"]
+            excess_v = row["SLA 초과(초)"]
+            
+            base_time = df_matrix[(df_matrix["운영 전략"] == BASE_STRATEGY) & (df_matrix["동선 시나리오"] == scen)]["실제 소요시간"].values[0]
+            time_diff_pct = ((time_v - base_time) / base_time) * 100
+            
+            pct_str = f"({time_diff_pct:+.1f}%)" if strat_name != BASE_STRATEGY else "(기준)"
+            status_icon = "⭕" if pass_v == 100.0 else f"❌ (+{excess_v:.1f}초)"
+            
+            row_data[f"{scen} (소요시간)"] = f"{time_v:.1f}초 {pct_str}"
+            row_data[f"{scen} (달성률)"] = f"{pass_v:.0f}% ({status_icon})"
+            
+        final_rows.append(row_data)
+        
+    df_pivot = pd.DataFrame(final_rows).set_index("운영 전략")
+    ordered_cols = [
+        "1층 ⬆️ 거주층 (소요시간)", "1층 ⬆️ 거주층 (달성률)",
+        "거주층 ⬇️ 1층 (소요시간)", "거주층 ⬇️ 1층 (달성률)",
+        "주차장 ⬆️ 거주층 (소요시간)", "주차장 ⬆️ 거주층 (달성률)",
+        "거주층 ⬇️ 주차장 (소요
