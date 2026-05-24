@@ -3,113 +3,110 @@ import pandas as pd
 import numpy as np
 import altair as alt
 
-# ----------------- [1] UI 및 페이지 전역 설정 -----------------
+# ----------------- [1] UI & Global Configuration -----------------
 st.set_page_config(page_title="Elevator ESG & SLA Lab", layout="wide")
 st.title("🏢 Elevator Strategic, ESG & SLA Experiment Lab")
-
-# 모든 한글 및 이모지 문자열은 전역 변수로 분리하여 인터프리터 충돌 방지
-SUB_HEADER_TEXT = "⚡ 동선별 타임라인·SLA 달성률 및 구축/신축 대조용 회생제동 가변 추적 시스템"
-st.subheader(SUB_HEADER_TEXT)
+st.subheader("⚡ System Metric Dashboard & Energy Regen Tracking Engine")
 
 st.markdown("""
-> 💡 **Simulation Methodology (연구 방법론):**
-> * **개별 동선 추적:** 4개 동선(1층↔거주층, 주차장↔거주층)의 실시간 소요 시간과 개별 SLA 달성률(0% 또는 100%)을 정밀 모니터링합니다.
-> * **구축 vs 신축 하드웨어 옵션:** 사이드바의 `회생제동 인버터 활성화` 토글을 통해 회생전력을 회수하는 **신축 아파트(ON)**와 열로 전력을 버리는 **구축 아파트(OFF)**의 에너지 차이를 대조할 수 있습니다.
-> * **실행 상태 유지:** `session_state` 기술을 적용하여 버튼 클릭 시 데이터가 증발하지 않고 화면에 완벽히 고정됩니다.
+> 💡 **Simulation Methodology:**
+> * **Route Tracking:** Monitors real-time travel duration and SLA success rate for 4 distinct paths.
+> * **ESG Hardware Option:** Toggle 'Regen Inverter' in the sidebar to compare a Modern Building (ON) vs Legacy Building (OFF).
+> * **Delta Comparison:** All results automatically display percentage variance (%) relative to the 'Baseline Strategy'.
 """)
 
-# ----------------- [2] SIDEBAR: 설정 변수 -----------------
+# ----------------- [2] SIDEBAR: Control Variables -----------------
 with st.sidebar:
-    st.header("🏗️ 건물 및 세대 설정")
+    st.header("🏗️ Building & Unit Settings")
     c1, c2 = st.columns(2)
-    with c1: max_f = st.number_input("지상 최고층", value=30, step=1)
-    with c2: min_f = st.number_input("지하 최저층", value=5, step=1)
+    with c1: max_f = st.number_input("Max Floor (Top)", value=30, step=1)
+    with c2: min_f = st.number_input("Min Floor (Lowest B)", value=5, step=1)
     
-    num_elevators = st.number_input("엘리베이터 개수", value=2, min_value=1, max_value=10)
-    households_per_floor = st.number_input("층당 세대수 (가구)", value=4, min_value=1)
-    stairs_floor = st.number_input("계단 이용 권장 층수", value=3, min_value=0, max_value=max_f)
-    parking_usage_rate = st.number_input("🚗 주차장 이용 비율 (%)", value=30, min_value=0, max_value=100, step=5)
+    num_elevators = st.number_input("Number of Elevators", value=2, min_value=1, max_value=10)
+    households_per_floor = st.number_input("Households per Floor", value=4, min_value=1)
+    stairs_floor = st.number_input("Recommended Stairs Threshold", value=3, min_value=0, max_value=max_f)
+    parking_usage_rate = st.number_input("Parking Lot Usage Rate (%)", value=30, min_value=0, max_value=100, step=5)
 
     st.divider()
-    st.header("🌱 ESG 하드웨어 옵션")
-    regen_enabled = st.toggle("🔄 회생제동(Regen) 인버터 활성화", value=True, help="OFF 시 회생전력이 발전되지 않고 열로 방출되는 구축 아파트 상태가 됩니다.")
+    st.header("🌱 ESG Hardware Configuration")
+    regen_enabled = st.toggle("Regen Inverter Active", value=True, help="If OFF, braking energy is wasted as heat (Legacy Infrastructure).")
 
     st.divider()
-    st.header("🚀 물리 엔진 설정")
-    floor_height = st.number_input("층간 높이 (m)", value=3.0)
-    max_velocity = st.number_input("정격 속도 (m/s)", value=2.5)
-    acceleration = st.number_input("가속도 (m/s²)", value=1.0)
+    st.header("🚀 Physics Engine Tuning")
+    floor_height = st.number_input("Floor Height (m)", value=3.0)
+    max_velocity = st.number_input("Rated Velocity (m/s)", value=2.5)
+    acceleration = st.number_input("Acceleration (m/s²)", value=1.0)
     
-    fixed_door_moving_time = st.number_input("고정 기계 작동 시간 (초) [열림+닫힘]", value=4.0, min_value=1.0, step=0.5)
-    base_door_time = st.number_input("기본 전체 문 시간 (초) [대기포함]", value=7.0, min_value=fixed_door_moving_time + 0.5, step=0.5)
-    button_efficiency = st.number_input("🔘 닫힘 버튼 효율 (%)", value=40, min_value=0, max_value=100, step=5)
+    fixed_door_moving_time = st.number_input("Mechanical Door Time (s) [Open+Close]", value=4.0, min_value=1.0, step=0.5)
+    base_door_time = st.number_input("Total Dwell Time (s) [Include Wait]", value=7.0, min_value=fixed_door_moving_time + 0.5, step=0.5)
+    button_efficiency = st.number_input("Close Button Efficiency (%)", value=40, min_value=0, max_value=100, step=5)
     
     pure_dwell_time = max(0.0, base_door_time - fixed_door_moving_time)
     saved_door_time = pure_dwell_time * (button_efficiency / 100)
     final_door_operating_time = base_door_time - saved_door_time
 
     st.divider()
-    st.header("⚠️ 서비스 임계치 (SLA) 설정")
-    lim_1f_up = st.number_input("SLA: 1층 → 거주층 (초)", value=45, min_value=10)
-    lim_res_1f = st.number_input("SLA: 거주층 → 1층 (초)", value=55, min_value=10)
-    lim_p_up = st.number_input("SLA: 주차장 → 거주층 (초)", value=50, min_value=10)
-    lim_res_p = st.number_input("SLA: 거주층 → 주차장 (초)", value=65, min_value=10)
+    st.header("⚠️ Service Level Agreement (SLA)")
+    lim_1f_up = st.number_input("SLA Target: 1F -> Resident (s)", value=45, min_value=10)
+    lim_res_1f = st.number_input("SLA Target: Resident -> 1F (s)", value=55, min_value=10)
+    lim_p_up = st.number_input("SLA Target: Parking -> Resident (s)", value=50, min_value=10)
+    lim_res_p = st.number_input("SLA Target: Resident -> Parking (s)", value=65, min_value=10)
 
-# ----------------- [3] MAIN: 인풋 설정 및 독립성 확보 -----------------
+# ----------------- [3] MAIN: Input Patterns -----------------
 FLOOR_LABELS = [f"B{i}" for i in range(min_f, 0, -1)] + [f"{i}F" for i in range(1, max_f + 1)]
 idx_1f = min_f 
 total_fs = len(FLOOR_LABELS)
 
-st.header("⚙️ 시뮬레이션 타임라인 및 수동 배치 설정")
+st.header("⚙️ Simulation Timeline & Manual Placement")
 c_time, c_custom = st.columns([1, 1])
 
 with c_time:
-    st.write("##### ⏰ AI 최적화 및 한전 요금제 시간대 기준")
+    st.write("##### Time Pattern Selection")
     time_options = [
-        "새벽 시간 (00시~06시) [한전 경부하: 78원/kWh]", 
-        "출근 시간 (07시~09시) [한전 최대부하: 195원/kWh]", 
-        "낮 시간 (09시~18시) [한전 중부하: 132원/kWh]", 
-        "퇴근 시간 (18시~20시) [한전 최대부하: 195원/kWh]", 
-        "저녁 시간 (20시~23시) [한전 최대부하: 195원/kWh]"
+        "Midnight (00-06) [Rate: 78 KRW/kWh]", 
+        "Rush-Hour (07-09) [Rate: 195 KRW/kWh]", 
+        "Daytime (09-18) [Rate: 132 KRW/kWh]", 
+        "Evening-Peak (18-20) [Rate: 195 KRW/kWh]", 
+        "Night (20-23) [Rate: 195 KRW/kWh]"
     ]
-    mode_selection = st.radio("시간대 패턴 선택", options=time_options, index=1, horizontal=False)
+    mode_selection = st.radio("Time Zone Settings", options=time_options, index=1, horizontal=False)
     mode_label = mode_selection.split(" (")[0]
-    current_is_deliv = True if mode_label == "새벽 시간" else False
+    current_is_deliv = True if "Midnight" in mode_selection else False
     
-    if "경부하" in mode_selection:
+    if "78 KRW" in mode_selection:
         kepco_rate = 78.0
-    elif "중부하" in mode_selection:
+    elif "132 KRW" in mode_selection:
         kepco_rate = 132.0
     else:
         kepco_rate = 195.0
 
 with c_custom:
-    st.write("##### ✍️ 사용자 수동 배치 설정")
+    st.write("##### Manual Car Allocation")
     m_cols = st.columns(num_elevators)
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_stable_v1_{i}")
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_pure_eng_{i}")
             manual_placements.append(val)
 
 st.divider()
 
-# --- 운영 전략 대기 포지션 맵 빌드 (Key값을 영문으로 완전 통일하여 에러 예방) ---
+# --- Dispatch Strategy Profile Configuration ---
 BASE_ID = "BASE"
 STRAT_MAP = {
-    BASE_ID: "전략 미적용 (랜덤 운행)",
-    "ODD_EVEN": "홀짝수층 분리 운행",
-    "ZONE_SPLIT": "고층부/저층부 분할배치",
-    "BASE_RETURN": "베이스 스테이션 집중",
-    "DYNAMIC_GAP": "동적 간격 배치",
-    "AI_OPTIM": f"AI 자동 최적화 ({mode_label})",
-    "MANUAL": "사용자 수동 배치"
+    BASE_ID: "Baseline Strategy (Random Dispatch)",
+    "ODD_EVEN": "Odd/Even Floor Zoning Strategy",
+    "ZONE_SPLIT": "High/Low Sector Split Strategy",
+    "BASE_RETURN": "Base Station (1F) Forced Return",
+    "DYNAMIC_GAP": "Equidistant Dynamic Gap Strategy",
+    "AI_OPTIM": f"AI Predictive Positioning ({mode_label})",
+    "MANUAL": "User-Defined Custom Allocation"
 }
 
 strategies_config = {}
 np.random.seed(42) 
 
-strategies_config[BASE_ID] = {"placements": list(np.random.randint(0, total_fs, num_elevators)), "logic": "자유 운행"}
+strategies_config[BASE_ID] = {"placements": list(np.random.randint(0, total_fs, num_elevators)), "logic": "Free"}
 
 oe_placements = []
 for i in range(num_elevators):
@@ -121,33 +118,33 @@ for i in range(num_elevators):
     else:
         even_floors = [f for f in range(total_fs) if f <= idx_1f or (f - idx_1f) % 2 == 0]
         oe_placements.append(int(np.random.choice(even_floors)))
-strategies_config["ODD_EVEN"] = {"placements": oe_placements, "logic": "홀짝 운행"}
+strategies_config["ODD_EVEN"] = {"placements": oe_placements, "logic": "Zoning"}
 
 mid_idx = (total_fs + idx_1f) // 2
 if num_elevators == 1:
     split_placements = [mid_idx]
 else:
     split_placements = [int(idx_1f + (mid_idx-idx_1f)/2) if i < num_elevators/2 else int(mid_idx + (total_fs-mid_idx)/2) for i in range(num_elevators)]
-strategies_config["ZONE_SPLIT"] = {"placements": split_placements, "logic": "분할 배치"}
+strategies_config["ZONE_SPLIT"] = {"placements": split_placements, "logic": "Split"}
 
-strategies_config["BASE_RETURN"] = {"placements": [idx_1f] * num_elevators, "logic": "자유 운행"}
+strategies_config["BASE_RETURN"] = {"placements": [idx_1f] * num_elevators, "logic": "Free"}
 
 if num_elevators == 1:
     spacing_placements = [mid_idx]
 else:
     spacing_placements = [int(f) for f in np.linspace(0, total_fs - 1, num_elevators)]
-strategies_config["DYNAMIC_GAP"] = {"placements": spacing_placements, "logic": "자유 운행"}
+strategies_config["DYNAMIC_GAP"] = {"placements": spacing_placements, "logic": "Free"}
 
-if mode_label == "새벽 시간":
+if "Midnight" in mode_label:
     ai_pos = [idx_1f] * (num_elevators // 2) + [0] * (num_elevators - num_elevators // 2) if num_elevators > 1 else [idx_1f]
-elif mode_label == "출근 시간":
+elif "Rush-Hour" in mode_label:
     res_start = idx_1f + stairs_floor + 1
     res_end = total_fs - 1
     ai_pos = [int(res_start + (res_end - res_start) * (i + 1) / (num_elevators + 1)) if res_start < res_end else res_end for i in range(num_elevators)]
-elif mode_label == "퇴근 시간":
+elif "Evening-Peak" in mode_label:
     p_count = int(round(num_elevators * (parking_usage_rate / 100)))
     ai_pos = [0] * p_count + [idx_1f] * (num_elevators - p_count)
-elif mode_label == "저녁 시간":
+elif "Night" in mode_label:
     lower_mid_f = int(idx_1f + (total_fs - idx_1f) * 0.3)
     ai_pos = []
     for i in range(num_elevators):
@@ -157,11 +154,11 @@ elif mode_label == "저녁 시간":
             ai_pos.append(lower_mid_f)
 else:
     ai_pos = [int(f) for f in np.linspace(0, total_fs - 1, num_elevators)]
-strategies_config["AI_OPTIM"] = {"placements": ai_pos, "logic": "자유 운행"}
+strategies_config["AI_OPTIM"] = {"placements": ai_pos, "logic": "Free"}
 
-strategies_config["MANUAL"] = {"placements": manual_placements, "logic": "자유 운행"}
+strategies_config["MANUAL"] = {"placements": manual_placements, "logic": "Free"}
 
-# ----------------- [4] 가변형 물리 엔진 코어 -----------------
+# ----------------- [4] Physics Engine Core -----------------
 def get_phys_time(dist_m, v_max, accel):
     if dist_m <= 0: return 0
     d_accel = (v_max**2) / (2 * accel)
@@ -172,9 +169,9 @@ def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, b
     if abs(start - end) <= s_floor and start >= idx_1f:
         return 5.0, 0.001
     
-    congestion_weights = {"매우 쾌적": 0.7, "쾌적": 0.9, "보통": 1.1, "혼잡": 1.8, "매우 혼잡": 2.5}
-    h_weight = 1.0 + (households - 1) * 0.05
-    w = congestion_weights[cong] * h_weight
+    congestion_weights = {"Very Clean": 0.7, "Clean": 0.9, "Normal": 1.1, "Crowded": 1.8, "Heavy Traffic": 2.5}
+    current_cong = "Normal" if cong not in congestion_weights else cong
+    w = congestion_weights[current_cong] * (1.0 + (households - 1) * 0.05)
     
     if is_deliv:
         w = w * 1.5
@@ -186,9 +183,9 @@ def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, b
     
     avail = [i for i in range(num_elevators)]
     if num_elevators > 1:
-        if "홀짝" in logic:
+        if "Zoning" in logic:
             avail = [i for i in avail if start <= idx_1f or (i % 2 == 0 and start % 2 != 0) or (i % 2 != 0 and start % 2 == 0)]
-        elif "분할" in logic:
+        elif "Split" in logic:
             mid = (total_fs + idx_1f) // 2
             avail = [i for i in avail if start <= idx_1f or (i < num_elevators/2 and start <= mid) or (i >= num_elevators/2 and start > mid)]
     if not avail: avail = [0]
@@ -197,7 +194,7 @@ def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, b
     min_dist_m = abs(placements[chosen_el_idx] - start) * floor_height
     wait_t = get_phys_time(min_dist_m, max_velocity, acceleration)
     
-    if logic == "베이스 스테이션 집중" and start != idx_1f:
+    if logic == "BASE_RETURN" and start != idx_1f:
         min_dist_m += (abs(end - idx_1f) * floor_height) 
 
     move_dist_m = abs(start - end) * floor_height
@@ -240,10 +237,29 @@ def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, b
     
     return final_time, total_kwh
 
-# ----------------- [5] 시뮬레이션 인터페이스 조율 -----------------
-st.subheader("🌐 Simulation Environment Controls")
+# ----------------- [5] Execution Interface -----------------
+st.subheader("🌐 Simulation Control Desk")
 
 c_env1, c_env2 = st.columns(2)
 with c_env1: 
-    congestion = st.radio("건물 내부 혼잡도 세부 선택", options=["매우 쾌적", "쾌적", "보통", "혼잡", "매우 혼잡"], index=2, horizontal=True)
-with
+    congestion = st.radio("Congestion Dynamic Level", options=["Very Clean", "Clean", "Normal", "Crowded", "Heavy Traffic"], index=2, horizontal=True)
+with c_env2: 
+    delivery_mode = st.toggle("Delivery Courier Penalty Active", value=current_is_deliv)
+
+infra_msg = "Infrastructure System Status: SMART REGEN ON" if regen_enabled else "Infrastructure System Status: TRADITIONAL HEAT-WASTE"
+st.info(infra_msg)
+
+if 'sim_run' not in st.session_state:
+    st.session_state.sim_run = False
+if 'matrix_data' not in st.session_state:
+    st.session_state.matrix_data = None
+
+if st.button("🚀 EXECUTE SYSTEM STRATEGY SIMULATION", type="primary", use_container_width=True):
+    avg_res_f = int(idx_1f + (max_f - 1) * 0.7)
+    
+    scenarios_config = {
+        "ROUTE_1F_UP": (idx_1f, avg_res_f, lim_1f_up, "1F -> Resident"),
+        "ROUTE_RES_1F": (avg_res_f, idx_1f, lim_res_1f, "Resident -> 1F"),
+        "ROUTE_P_UP": (0, avg_res_f, lim_p_up, "Parking -> Resident"),
+        "ROUTE_RES_P": (avg_res_f, 0, lim_res_p, "Resident -> Parking")
+    }
