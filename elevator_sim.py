@@ -11,7 +11,7 @@ st.subheader("⚡ 동선별 타임라인·SLA 달성률 및 회생제동 기반 
 st.markdown("""
 > 💡 **Simulation Methodology (연구 방법론):**
 > * **개별 동선 추적:** 4개 동선(1층↔거주층, 주차장↔거주층)의 실시간 소요 시간과 개별 SLA 달성률(0% 또는 100%)을 정밀 모니터링합니다.
-> * **표준 물리 참조 및 회생제동 모델:** 본 시스템은 기어리스 동기모터(Efficiency 85%) 및 KEPCO 공동주택용 종합계약 단가를 기준으로 설계된 **'표준 물리 참조 모델'**을 사용합니다. 특히 현대 신축 아파트의 필수 기술인 **회생 제동(Regenerative Braking)** 물리 공식을 반영하여 만차 하행(⬇️) 및 공차 상행(⬆️) 시 발생하는 자가발전 전력 상쇄 효과를 정밀하게 추적합니다.
+> * **표준 물리 참조 및 회생제동 모델:** 본 시스템은 기어리스 동기모터(Efficiency 85%) 및 KEPCO 공동주택용 종합계약 단가를 기준으로 설계된 **'표준 물리 참조 모델'**을 사용합니다. 특히 현대 신축 아파트의 필수 기술인 **회생 제동(Regenerative Braking)** 물리 공식과 함께 **포아송 분포 확률 트래픽**을 반영하여 자가발전 전력 상쇄 효과 및 현실적 대기 지연을 정밀하게 추적합니다.
 > * **대조 분석 기능 추가:** 모든 운영 전략의 연산 결과는 기준점인 **'전략 미적용 (랜덤 운행)' 대비 증감률(%)**로 자동 환산되어 알고리즘의 우수성을 정량적으로 증명합니다.
 """)
 
@@ -27,7 +27,20 @@ with st.sidebar:
     stairs_floor = st.number_input("계단 이용 권장 층수", value=3, min_value=0, max_value=max_f)
     parking_usage_rate = st.number_input("🚗 주차장 이용 비율 (%)", value=30, min_value=0, max_value=100, step=5)
 
-    # 🟢 [추가 기능] 타겟 인프라 대조용 회생제동 ON/OFF 스위치
+    # 🟢 [통계적 트래픽 설정 추가] 기존 UI 흐름을 해치지 않도록 사이드바 하단 배치
+    st.divider()
+    st.header("📊 통계적 트래픽 및 층별 가중치")
+    poisson_lambda = st.slider(
+        "포아송 분포 λ (분당 호출 집중도)", 
+        min_value=1.0, max_value=20.0, value=5.0, step=1.0,
+        help="값이 높을수록 앞선 호출이 밀려 대기 시간이 늘어나는 병목 현상이 강해집니다."
+    )
+    high_floor_penalty = st.slider(
+        "고층부 대기 패널티 계수", 
+        min_value=1.0, max_value=3.0, value=1.5, step=0.1,
+        help="고층일수록 엘리베이터를 놓쳤을 때 발생하는 체감 대기시간 증가율입니다."
+    )
+
     st.divider()
     st.header("🌱 ESG 하드웨어 옵션")
     regen_enabled = st.toggle(
@@ -159,9 +172,9 @@ def get_phys_time(dist_m, v_max, accel):
     if dist_m >= 2 * d_accel: return (2 * (v_max / accel)) + (dist_m - 2 * d_accel) / v_max
     return 2 * np.sqrt(dist_m / accel)
 
-# 인자값 맨 끝에 회생제동 스위치 상태를 전달받도록 바인딩
-def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, base_t, fixed_t, p_rate, s_floor, households, is_regen_on):
-    if abs(start - end) <= s_floor and start >= idx_1f:
+# 🟢 기존 시뮬레이터 인자에 통계 매개변수(p_lambda, h_penalty) 결합
+def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, base_t, fixed_t, p_rate, s_floor, households, is_regen_on, p_lambda, h_penalty, start_idx, tot_floors):
+    if abs(start - end) <= s_floor and start >= start_idx:
         return 5.0, 0.001
     
     congestion_weights = {"매우 쾌적": 0.7, "쾌적": 0.9, "보통": 1.1, "혼잡": 1.8, "매우 혼잡": 2.5}
@@ -179,28 +192,41 @@ def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, b
     avail = [i for i in range(num_elevators)]
     if num_elevators > 1:
         if "홀짝" in logic:
-            avail = [i for i in avail if start <= idx_1f or (i % 2 == 0 and start % 2 != 0) or (i % 2 != 0 and start % 2 == 0)]
+            avail = [i for i in avail if start <= start_idx or (i % 2 == 0 and start % 2 != 0) or (i % 2 != 0 and start % 2 == 0)]
         elif "분할" in logic:
-            mid = (total_fs + idx_1f) // 2
-            avail = [i for i in avail if start <= idx_1f or (i < num_elevators/2 and start <= mid) or (i >= num_elevators/2 and start > mid)]
+            mid = (tot_floors + start_idx) // 2
+            avail = [i for i in avail if start <= start_idx or (i < num_elevators/2 and start <= mid) or (i >= num_elevators/2 and start > mid)]
     if not avail: avail = [0]
     
     chosen_el_idx = avail[0]
     min_dist_m = abs(placements[chosen_el_idx] - start) * floor_height
     wait_t = get_phys_time(min_dist_m, max_velocity, acceleration)
     
-    if logic == "베이스 스테이션 집중" and start != idx_1f:
-        min_dist_m += (abs(end - idx_1f) * floor_height) 
+    if logic == "베이스 스테이션 집중" and start != start_idx:
+        min_dist_m += (abs(end - start_idx) * floor_height) 
+
+    # 🟢 [수식 탑재 1] 층별 불평등 지표 (고층부 위치 기반 대기 지연 가중치)
+    if start > start_idx:
+        w_floor = 1.0 + ((start - start_idx) / (tot_floors - start_idx)) * h_penalty
+    else:
+        w_floor = 1.0
+
+    # 🟢 [수식 탑재 2] 포아송 분포 기반 돌발 혼잡 호출 트래픽 시뮬레이션
+    traffic_burst = np.random.poisson(p_lambda)
+    poisson_multiplier = 1.0 + (traffic_burst * 0.05) 
+    
+    # 계산된 대기 시간에 통계 확률적 보정치 결합
+    wait_t = wait_t * w_floor * poisson_multiplier
 
     move_dist_m = abs(start - end) * floor_height
     move_t = get_phys_time(move_dist_m, max_velocity, acceleration)
     
-    if start < idx_1f or end < idx_1f:
+    if start < start_idx or end < start_idx:
         wait_t = wait_t * (1 - (p_rate / 100) * 0.4)
     
     pure_dwell = max(0.0, base_t - fixed_t)
     door_eff_t = fixed_t + (pure_dwell * (1 - (eff/100)))
-    if start == idx_1f: 
+    if start == start_idx: 
         door_eff_t = door_eff_t * 1.2
         
     final_time = (wait_t + move_t + (door_eff_t * w)) * (1.3 if is_deliv else 1.0)
@@ -209,20 +235,18 @@ def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, b
     moving_time_pure = get_phys_time(total_moving_dist, max_velocity, acceleration)
     energy_move_base = ((500 * 9.8 * max_velocity * moving_time_pure) / (0.85 * 3600 * 1000)) * delivery_stops_penalty
     
-    # 회생제동 인버터 제어 가변형 물리 공식
     is_upward = (end > start)
     is_heavy_load = (w >= 1.2 or is_deliv)
     
     regen_factor = 1.0
     if is_regen_on:
         if is_upward and not is_heavy_load:
-            regen_factor = -0.35  # 상행 공차 자가발전 상쇄
+            regen_factor = -0.35
         elif not is_upward and is_heavy_load:
-            regen_factor = -0.40  # 하행 만차 자가발전 상쇄
+            regen_factor = -0.40
         elif is_upward and is_heavy_load:
             regen_factor = 1.30
     else:
-        # 회생제동 미동작(OFF) 시: 에너지를 발전하지 못하고 상행 부하 시의 전력 계수 가중치만 패널티로 적용
         if is_upward and is_heavy_load:
             regen_factor = 1.30
         else:
@@ -242,13 +266,13 @@ with c_env1:
 with c_env2: 
     delivery_mode = st.toggle("📦 배달 패널티 활성화", value=current_is_deliv)
 
-# 현재 회생제동 하드웨어 작동 상태 인프라 알림 상태창
 infra_badge = "🟢 회생제동 인버터 활성화 모드 (신축형)" if regen_enabled else "🔴 회생제동 인버터 비활성화 모드 (구축형)"
 st.info(f"현재 물리 엔진 타겟 상태: **{infra_badge}**")
 
 if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 산출", type="primary", use_container_width=True):
     avg_res_f = int(idx_1f + (max_f - 1) * 0.7)
     
+    # 🟢 원본 4대 동선 완벽 원상복구
     scenarios = {
         "1층 ⬆️ 거주층": (idx_1f, avg_res_f, lim_1f_up),
         "거주층 ⬇️ 1층": (avg_res_f, idx_1f, lim_res_1f),
@@ -264,11 +288,11 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
             p_rate_param = parking_usage_rate if strat_name != "전략 미적용 (랜덤 운행)" else 0
             s_floor_param = stairs_floor if strat_name != "전략 미적용 (랜덤 운행)" else 0
             
-            # 🟢 대조를 위해 사이드바의 토글 변수(regen_enabled)를 코어 함수에 주입
             calc_time, calc_kwh = simulate_route_esg_sla(
                 start, end, config["placements"], config["logic"], 
                 congestion, delivery_mode, eff_param, base_door_time, fixed_door_moving_time,
-                p_rate_param, s_floor_param, households_per_floor, regen_enabled
+                p_rate_param, s_floor_param, households_per_floor, regen_enabled,
+                poisson_lambda, high_floor_penalty, idx_1f, total_fs
             )
             
             sla_diff = calc_time - target_sla
@@ -318,6 +342,8 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
         final_rows.append(row_data)
         
     df_pivot = pd.DataFrame(final_rows).set_index("운영 전략")
+    
+    # 🟢 원본 테이블 컬럼 순서 완벽 복구
     ordered_cols = [
         "1층 ⬆️ 거주층 (소요시간)", "1층 ⬆️ 거주층 (달성률)",
         "거주층 ⬇️ 1층 (소요시간)", "거주층 ⬇️ 1층 (달성률)",
