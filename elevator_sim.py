@@ -10,7 +10,7 @@ st.subheader("⚡ 동선별 타임라인·SLA 달성률 및 회생제동 기반 
 
 st.markdown("""
 > 💡 **Simulation Methodology (연구 방법론):**
-> * **개별 동선 추적:** 4개 동선(1층↔거주층, 주차장↔거주층)의 실시간 소요 시간과 개별 SLA 달성률(0% 또는 100%)을 정밀 모니터링합니다.
+> * **개별 동선 추적:** 4개 동선(1층↔거주층, 주차장↔거주층)의 실시간 소요 시간과 개별 SLA 달성률을 정밀 모니터링합니다.
 > * **표준 물리 참조 및 회생제동 모델:** 본 시스템은 기어리스 동기모터(Efficiency 85%) 및 KEPCO 공동주택용 종합계약 단가를 기준으로 설계된 **'표준 물리 참조 모델'**을 사용합니다. 특히 현대 신축 아파트의 필수 기술인 **회생 제동(Regenerative Braking)** 물리 공식과 함께 **포아송 분포 확률 트래픽**을 반영하여 자가발전 전력 상쇄 효과 및 현실적 대기 지연을 정밀하게 추적합니다.
 > * **대조 분석 기능 추가:** 모든 운영 전략의 연산 결과는 기준점인 **'전략 미적용 (랜덤 운행)' 대비 증감률(%)**로 자동 환산되어 알고리즘의 우수성을 정량적으로 증명합니다.
 """)
@@ -28,7 +28,6 @@ with st.sidebar:
     parking_usage_rate = st.number_input("🚗 주차장 이용 비율 (%)", value=30, min_value=0, max_value=100, step=5)
 
     st.divider()
-    # 🟢 [수정됨] 통계적 트래픽 설정을 직관적인 숫자 입력식으로 변경 (기본값: 발표 최적화 수치)
     st.header("📊 통계적 트래픽 및 층별 가중치")
     poisson_lambda = st.number_input(
         "포아송 분포 λ (분당 호출 집중도)", 
@@ -169,7 +168,8 @@ strategies_config["사용자 수동 배치"] = {"placements": manual_placements,
 def get_phys_time(dist_m, v_max, accel):
     if dist_m <= 0: return 0
     d_accel = (v_max**2) / (2 * accel)
-    if dist_m >= 2 * d_accel: return (2 * (v_max / accel)) + (dist_m - 2 * d_accel) / v_max
+    if dist_m >= 2 * d_accel: 
+        return (2 * (v_max / accel)) + (dist_m - 2 * d_accel) / v_max
     return 2 * np.sqrt(dist_m / accel)
 
 def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, base_t, fixed_t, p_rate, s_floor, households, is_regen_on, p_lambda, h_penalty, start_idx, tot_floors):
@@ -269,138 +269,3 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
     avg_res_f = int(idx_1f + (max_f - 1) * 0.7)
     
     scenarios = {
-        "1층 ⬆️ 거주층": (idx_1f, avg_res_f, lim_1f_up),
-        "거주층 ⬇️ 1층": (avg_res_f, idx_1f, lim_res_1f),
-        "주차장 ⬆️ 거주층": (0, avg_res_f, lim_p_up),
-        "거주층 ⬇️ 주차장": (avg_res_f, 0, lim_res_p)
-    }
-    
-    matrix_results = []
-    
-    for s_name, (start, end, target_sla) in scenarios.items():
-        for strat_name, config in strategies_config.items():
-            eff_param = button_efficiency if strat_name != "전략 미적용 (랜덤 운행)" else 0
-            p_rate_param = parking_usage_rate if strat_name != "전략 미적용 (랜덤 운행)" else 0
-            s_floor_param = stairs_floor if strat_name != "전략 미적용 (랜덤 운행)" else 0
-            
-            calc_time, calc_kwh = simulate_route_esg_sla(
-                start, end, config["placements"], config["logic"], 
-                congestion, delivery_mode, eff_param, base_door_time, fixed_door_moving_time,
-                p_rate_param, s_floor_param, households_per_floor, regen_enabled,
-                poisson_lambda, high_floor_penalty, idx_1f, total_fs
-            )
-            
-            sla_diff = calc_time - target_sla
-            is_sla_pass = 100.0 if sla_diff <= 0 else 0.0
-            sla_excess = max(0.0, sla_diff) 
-            
-            calc_cost = calc_kwh * kepco_rate
-            calc_carbon = calc_kwh * 424.0
-            
-            matrix_results.append({
-                "운영 전략": strat_name,
-                "동선 시나리오": s_name,
-                "실제 소요시간": calc_time,
-                "목표 SLA": target_sla,
-                "SLA 초과(초)": sla_excess,
-                "SLA 달성률": is_sla_pass,
-                "전력 소비량(kWh)": calc_kwh,
-                "전기 요금(원)": calc_cost,
-                "탄소 배출량(g)": calc_carbon
-            })
-            
-    df_matrix = pd.DataFrame(matrix_results)
-    
-    # 📈 [1] 테이블 출력: 동선별 정밀 스코어보드
-    st.write("### 📈 [동선별 정밀 스코어보드] 운영 전략 × 시나리오 매트릭스 (% 대조)")
-    
-    final_rows = []
-    for strat_name in strategies_config.keys():
-        strat_df = df_matrix[df_matrix["운영 전략"] == strat_name]
-        row_data = {"운영 전략": strat_name}
-        
-        for _, row in strat_df.iterrows():
-            scen = row["동선 시나리오"]
-            time_v = row["실제 소요시간"]
-            pass_v = row["SLA 달성률"]
-            excess_v = row["SLA 초과(초)"]
-            
-            base_time = df_matrix[(df_matrix["운영 전략"] == "전략 미적용 (랜덤 운행)") & (df_matrix["동선 시나리오"] == scen)]["실제 소요시간"].values[0]
-            time_diff_pct = ((time_v - base_time) / base_time) * 100
-            
-            pct_str = f"({time_diff_pct:+.1f}%)" if strat_name != "전략 미적용 (랜덤 운행)" else "(기준)"
-            status_icon = "⭕" if pass_v == 100.0 else f"❌ (+{excess_v:.1f}초)"
-            
-            row_data[f"{scen} (소요시간)"] = f"{time_v:.1f}초 {pct_str}"
-            row_data[f"{scen} (달성률)"] = f"{pass_v:.0f}% ({status_icon})"
-            
-        final_rows.append(row_data)
-        
-    df_pivot = pd.DataFrame(final_rows).set_index("운영 전략")
-    
-    ordered_cols = [
-        "1층 ⬆️ 거주층 (소요시간)", "1층 ⬆️ 거주층 (달성률)",
-        "거주층 ⬇️ 1층 (소요시간)", "거주층 ⬇️ 1층 (달성률)",
-        "주차장 ⬆️ 거주층 (소요시간)", "주차장 ⬆️ 거주층 (달성률)",
-        "거주층 ⬇️ 주차장 (소요시간)", "거주층 ⬇️ 주차장 (달성률)"
-    ]
-    st.dataframe(df_pivot[ordered_cols], use_container_width=True)
-    
-    # 🌿 [2] 테이블 출력: ESG 환경 부하 통합 스코어보드
-    st.write(f"### 🌿 [ESG 친환경 부하 분석] 전략별 누적 에너지 및 탄소 배출 비교 ({'회생제동 ON' if regen_enabled else '회생제동 OFF'})")
-    df_esg_summary = df_matrix.groupby("운영 전략").agg({
-        "전력 소비량(kWh)": "sum",
-        "전기 요금(원)": "sum",
-        "탄소 배출량(g)": "sum"
-    }).reset_index()
-    
-    base_row = df_esg_summary[df_esg_summary["운영 전략"] == "전략 미적용 (랜덤 운행)"].iloc[0]
-    esg_rows = []
-    for _, row in df_esg_summary.iterrows():
-        strat = row["운영 전략"]
-        kwh_v = row["전력 소비량(kWh)"]
-        cost_v = row["전기 요금(원)"]
-        co2_v = row["탄소 배출량(g)"]
-        
-        kwh_diff_pct = ((kwh_v - base_row["전력 소비량(kWh)"]) / base_row["전력 소비량(kWh)"]) * 100 if base_row["전력 소비량(kWh)"] != 0 else 0
-        cost_diff_pct = ((cost_v - base_row["전기 요금(원)"]) / base_row["전기 요금(원)"]) * 100
-        co2_diff_pct = ((co2_v - base_row["탄소 배출량(g)"]) / base_row["탄소 배출량(g)"]) * 100 if base_row["탄소 배출량(g)"] != 0 else 0
-        
-        pct_kwh_str = f" ({kwh_diff_pct:+.1f}%)" if strat != "전략 미적용 (랜덤 운행)" else " (기준)"
-        pct_cost_str = f" ({cost_diff_pct:+.1f}%)" if strat != "전략 미적용 (랜덤 운행)" else " (기준)"
-        pct_co2_str = f" ({co2_diff_pct:+.1f}%)" if strat != "전략 미적용 (랜덤 운행)" else " (기준)"
-        
-        esg_rows.append({
-            "운영 전략": strat,
-            "총 전력 소비량": f"{kwh_v:.4f} kWh{pct_kwh_str}",
-            "총 예상 전기요금": f"{cost_v:.1f} 원{pct_cost_str}",
-            "누적 탄소 배출 발자국": f"{co2_v:.1f} g CO₂{pct_co2_str}"
-        })
-    st.dataframe(pd.DataFrame(esg_rows).set_index("운영 전략"), use_container_width=True)
-
-    st.divider()
-
-    # 📊 [3] 시각화 그래프 파트
-    st.write("### 📊 전략 평가 핵심 데이터 시각화 분석 (동선 차이 & 에너지 소비)")
-    g_col1, g_col2 = st.columns(2)
-    
-    with g_col1:
-        st.write("##### ⏳ [동선별] 실제 소요 시간 전략별 비교")
-        time_chart = alt.Chart(df_matrix).mark_bar().encode(
-            x=alt.X('운영 전략:N', axis=alt.Axis(title=None, labels=False)),
-            y=alt.Y('실제 소요시간:Q', title='소요 시간 (초)'),
-            color=alt.Color('운영 전략:N', legend=alt.Legend(title="운영 전략", orient="bottom")),
-            column=alt.Column('동선 시나리오:N', title="시나리오 동선 구간")
-        ).properties(width=130, height=300)
-        st.altair_chart(time_chart)
-        st.caption("💡 각 동선 구역별로 막대가 낮을수록 더 효율적이고 빠른 알고리즘 배치 전략임을 뜻합니다.")
-
-    with g_col2:
-        st.write("##### ⚡ [에너지] 전략별 총 전력 소비량(kWh) 대조 그래프")
-        energy_chart = alt.Chart(df_esg_summary).mark_bar().encode(
-            x=alt.X('운영 전략:N', axis=alt.Axis(labelAngle=-45, title="운영 전략")),
-            y=alt.Y('전력 소비량(kWh):Q', title='누적 전력 소비량 (kWh)'),
-            color=alt.Color('운영 전략:N', legend=None)
-        ).properties(height=345)
-        st.altair_chart(energy_chart, use_container_width=True)
-        st.caption("💡 무부하 대기 위치 최적화 및 회생 제동으로 자가발전된 에너지가 최종 반영된 총 순 소비량입니다.")
