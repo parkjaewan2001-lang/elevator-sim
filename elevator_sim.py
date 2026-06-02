@@ -76,7 +76,14 @@ FLOOR_LABELS = [f"B{i}" for i in range(min_f, 0, -1)] + [f"{i}F" for i in range(
 idx_1f = min_f 
 total_fs = len(FLOOR_LABELS)
 
+# 🟢 [추가됨] 고층부 인덱스를 미리 계산하여 메인 화면 상단에 표시
+mid_idx = (total_fs + idx_1f) // 2
+
 st.header("⚙️ 시뮬레이션 타임라인 및 수동 배치 설정")
+
+# 🟢 [추가됨] 실시간 건물 구조 및 고층부 기준 알림창
+st.info(f"📍 **건물 구조 분석:** 총 {total_fs}개 층 (지하 {min_f}개 층 ~ 지상 {max_f}개 층) ｜ 🏢 **현재 고층부 알고리즘 적용 기준 층:** **{FLOOR_LABELS[mid_idx]} 이상**")
+
 c_time, c_custom = st.columns([1, 1])
 
 with c_time:
@@ -136,7 +143,6 @@ strategies_config["홀짝수층 분리 운행"] = {
     "desc": "홀/짝수층 전담 정차로 감속 손실 방지"
 }
 
-mid_idx = (total_fs + idx_1f) // 2
 if num_elevators == 1:
     split_placements = [mid_idx]
 else:
