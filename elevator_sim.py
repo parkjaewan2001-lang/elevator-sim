@@ -327,9 +327,16 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
             
             calc_cost = calc_kwh * kepco_rate
             calc_carbon = calc_kwh * 424.0
+
+            placement_text = "-"
+            if "AI 자동 최적화" in strat_name:
+                placement_text = ", ".join(
+                    [f"EL {chr(65+i)}:{FLOOR_LABELS[p]}" for i, p in enumerate(config["placements"])]
+                )
             
             matrix_results.append({
                 "운영 전략": strat_name,
+                "AI 배치층": placement_text,
                 "동선 시나리오": s_name,
                 "실제 소요시간": calc_time,
                 "목표 SLA": target_sla,
@@ -348,7 +355,7 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
     final_rows = []
     for strat_name in strategies_config.keys():
         strat_df = df_matrix[df_matrix["운영 전략"] == strat_name]
-        row_data = {"운영 전략": strat_name}
+        row_data = {"운영 전략": strat_name, "AI 배치층": strat_df["AI 배치층"].iloc[0]}
         
         for _, row in strat_df.iterrows():
             scen = row["동선 시나리오"]
@@ -370,6 +377,7 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
     df_pivot = pd.DataFrame(final_rows).set_index("운영 전략")
     
     ordered_cols = [
+        "AI 배치층",
         "1층 ⬆️ 거주층 (소요시간)", "1층 ⬆️ 거주층 (달성률)",
         "거주층 ⬇️ 1층 (소요시간)", "거주층 ⬇️ 1층 (달성률)",
         "주차장 ⬆️ 거주층 (소요시간)", "주차장 ⬆️ 거주층 (달성률)",
