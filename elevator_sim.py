@@ -202,7 +202,7 @@ def get_phys_time(dist_m, v_max, accel):
         return (2 * (v_max / accel)) + (dist_m - 2 * d_accel) / v_max
     return 2 * np.sqrt(dist_m / accel)
 
-def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, base_t, fixed_t, p_rate, s_floor, households, is_regen_on, p_lambda, h_penalty, start_idx, tot_floors):
+def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, base_t, fixed_t, p_rate, s_floor, households, is_regen_on, p_lambda, h_penalty, start_idx, tot_floors, shared_traffic_burst=None):
     if abs(start - end) <= s_floor and start >= start_idx:
         return 5.0, 0.001
     
@@ -239,7 +239,7 @@ def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, b
     else:
         w_floor = 1.0
 
-    traffic_burst = np.random.poisson(p_lambda)
+    traffic_burst = shared_traffic_burst if shared_traffic_burst is not None else np.random.poisson(p_lambda)
     poisson_multiplier = 1.0 + (traffic_burst * 0.05) 
     wait_t = wait_t * w_floor * poisson_multiplier
 
@@ -295,6 +295,7 @@ infra_badge = "🟢 회생제동 인버터 활성화 모드 (신축형)" if rege
 st.info(f"현재 물리 엔진 타겟 상태: **{infra_badge}**")
 
 if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 산출", type="primary", use_container_width=True):
+    np.random.seed(42)  # 재현성 고정
     avg_res_f = int(idx_1f + (max_f - 1) * 0.7)
     
     scenarios = {
@@ -307,6 +308,7 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
     matrix_results = []
     
     for s_name, (start, end, target_sla) in scenarios.items():
+        shared_traffic_burst = np.random.poisson(poisson_lambda)  # 모든 전략이 동일 교통량 사용
         for strat_name, config in strategies_config.items():
             eff_param = button_efficiency if strat_name != "전략 미적용 (랜덤 운행)" else 0
             p_rate_param = parking_usage_rate if strat_name != "전략 미적용 (랜덤 운행)" else 0
@@ -316,7 +318,7 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
                 start, end, config["placements"], config["logic"], 
                 congestion, delivery_mode, eff_param, base_door_time, fixed_door_moving_time,
                 p_rate_param, s_floor_param, households_per_floor, regen_enabled,
-                poisson_lambda, high_floor_penalty, idx_1f, total_fs
+                poisson_lambda, high_floor_penalty, idx_1f, total_fs, shared_traffic_burst
             )
             
             sla_diff = calc_time - target_sla
@@ -325,17 +327,9 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
             
             calc_cost = calc_kwh * kepco_rate
             calc_carbon = calc_kwh * 424.0
-
-            placement_text = "-"
-            if "AI 자동 최적화" in strat_name:
-                placement_text = ", ".join(
-                    [f"EL {chr(65+i)}:{FLOOR_LABELS[p]}"
-                     for i, p in enumerate(config["placements"])]
-                )
             
             matrix_results.append({
                 "운영 전략": strat_name,
-                "AI 배치층": placement_text,
                 "동선 시나리오": s_name,
                 "실제 소요시간": calc_time,
                 "목표 SLA": target_sla,
@@ -354,7 +348,7 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
     final_rows = []
     for strat_name in strategies_config.keys():
         strat_df = df_matrix[df_matrix["운영 전략"] == strat_name]
-        row_data = {"운영 전략": strat_name, "AI 배치층": strat_df["AI 배치층"].iloc[0]}
+        row_data = {"운영 전략": strat_name}
         
         for _, row in strat_df.iterrows():
             scen = row["동선 시나리오"]
@@ -376,7 +370,6 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
     df_pivot = pd.DataFrame(final_rows).set_index("운영 전략")
     
     ordered_cols = [
-        "AI 배치층",
         "1층 ⬆️ 거주층 (소요시간)", "1층 ⬆️ 거주층 (달성률)",
         "거주층 ⬇️ 1층 (소요시간)", "거주층 ⬇️ 1층 (달성률)",
         "주차장 ⬆️ 거주층 (소요시간)", "주차장 ⬆️ 거주층 (달성률)",
