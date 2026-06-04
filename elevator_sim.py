@@ -60,10 +60,6 @@ with st.sidebar:
     base_door_time = st.number_input("기본 전체 문 시간 (초) [대기포함]", value=7.0, min_value=fixed_door_moving_time + 0.5, step=0.5)
     button_efficiency = st.number_input("🔘 닫힘 버튼 효율 (%)", value=40, min_value=0, max_value=100, step=5)
     
-    pure_dwell_time = max(0.0, base_door_time - fixed_door_moving_time)
-    saved_door_time = pure_dwell_time * (button_efficiency / 100)
-    final_door_operating_time = base_door_time - saved_door_time
-
     st.divider()
     st.header("⚠️ 서비스 임계치 (SLA) 설정")
     lim_1f_up = st.number_input("SLA: 1층 → 거주층 (초)", value=45, min_value=10)
@@ -90,7 +86,6 @@ with c_time:
     ]
     mode_selection = st.radio("시간대 패턴 선택", options=time_options, index=1, horizontal=False)
     mode_label = mode_selection.split(" (")[0]
-    current_is_deliv = True if mode_label == "새벽 시간" else False
     
     if "경부하" in mode_selection:
         kepco_rate = 78.0
@@ -194,7 +189,7 @@ strategies_config["사용자 수동 배치"] = {
     "desc": "연구원 임의 정의 슬롯 배치"
 }
 
-# ⭐ [추가된 부분] AI가 선택한 대기 층수를 UI에 직관적으로 표시
+# AI 배치 결과 UI 출력
 ai_floor_names = [FLOOR_LABELS[f] for f in ai_pos]
 st.success(f"🤖 **[AI 자동 최적화]** 현재 **'{mode_label}'** 패턴에 따른 AI 최적 대기 층: **{', '.join(ai_floor_names)}**")
 
@@ -291,7 +286,7 @@ def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, b
 st.subheader("🌐 시뮬레이션 환경 조건 가동")
 c_env1, c_env2 = st.columns(2)
 with c_env1: 
-    congestion = st.radio("건물 내부 혼잡도 세부 선택", options=["매우 쾌적", "쾌적", "보통", "혼잡", "매 큰 혼잡"], index=2, horizontal=True)
+    congestion = st.radio("건물 내부 혼잡도 세부 선택", options=["매우 쾌적", "쾌적", "보통", "혼잡", "매우 혼잡"], index=2, horizontal=True)
 with c_env2: 
     delivery_mode = st.toggle("📦 배달 패널티 활성화", value=current_is_deliv)
 
@@ -344,7 +339,6 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
             
     df_matrix = pd.DataFrame(matrix_results)
     
-    # 📈 [1] 테이블 출력: 동선별 정밀 스코어보드
     st.write("### 📈 [동선별 정밀 스코어보드] 운영 전략 × 시나리오 매트릭스 (% 대조)")
     
     final_rows = []
@@ -379,7 +373,6 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
     ]
     st.dataframe(df_pivot[ordered_cols], use_container_width=True)
     
-    # 🌿 [2] 테이블 출력: ESG 환경 부하 통합 스코어보드
     st.write(f"### 🌿 [ESG 친환경 부하 분석] 전략별 누적 에너지 및 탄소 배출 비교 ({'회생제동 ON' if regen_enabled else '회생제동 OFF'})")
     df_esg_summary = df_matrix.groupby("운영 전략").agg({
         "전력 소비량(kWh)": "sum",
@@ -413,7 +406,6 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
 
     st.divider()
 
-    # 📊 [3] 시각화 그래프 파트
     st.write("### 📊 전략 평가 핵심 데이터 시각화 분석 (동선 차이 & 에너지 소비)")
     g_col1, g_col2 = st.columns(2)
     
