@@ -194,6 +194,10 @@ strategies_config["사용자 수동 배치"] = {
     "desc": "연구원 임의 정의 슬롯 배치"
 }
 
+# ⭐ [추가된 부분] AI가 선택한 대기 층수를 UI에 직관적으로 표시
+ai_floor_names = [FLOOR_LABELS[f] for f in ai_pos]
+st.success(f"🤖 **[AI 자동 최적화]** 현재 **'{mode_label}'** 패턴에 따른 AI 최적 대기 층: **{', '.join(ai_floor_names)}**")
+
 # ----------------- [4] 물리 엔진 및 회생제동 알고리즘 코어 -----------------
 def get_phys_time(dist_m, v_max, accel):
     if dist_m <= 0: return 0
@@ -287,7 +291,7 @@ def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, b
 st.subheader("🌐 시뮬레이션 환경 조건 가동")
 c_env1, c_env2 = st.columns(2)
 with c_env1: 
-    congestion = st.radio("건물 내부 혼잡도 세부 선택", options=["매우 쾌적", "쾌적", "보통", "혼잡", "매우 혼잡"], index=2, horizontal=True)
+    congestion = st.radio("건물 내부 혼잡도 세부 선택", options=["매우 쾌적", "쾌적", "보통", "혼잡", "매 큰 혼잡"], index=2, horizontal=True)
 with c_env2: 
     delivery_mode = st.toggle("📦 배달 패널티 활성화", value=current_is_deliv)
 
