@@ -329,7 +329,12 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
             calc_carbon = calc_kwh * 424.0
 
             placement_text = "-"
-            if "AI 자동 최적화" in strat_name:
+            if (
+                "AI 자동 최적화" in strat_name
+                or strat_name == "고층부/저층부 분할배치"
+                or strat_name == "동적 간격 배치"
+                or strat_name == "사용자 수동 배치"
+            ):
                 placement_text = ", ".join(
                     [f"EL {chr(65+i)}:{FLOOR_LABELS[p]}" for i, p in enumerate(config["placements"])]
                 )
