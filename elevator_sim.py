@@ -334,6 +334,7 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
                 or strat_name == "고층부/저층부 분할배치"
                 or strat_name == "동적 간격 배치"
                 or strat_name == "사용자 수동 배치"
+                or strat_name == "베이스 스테이션 집중"
             ):
                 placement_text = ", ".join(
                     [f"EL {chr(65+i)}:{FLOOR_LABELS[p]}" for i, p in enumerate(config["placements"])]
