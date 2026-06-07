@@ -14,8 +14,9 @@ st.markdown("""
 > 💡 **Simulation Methodology (연구 방법론):**
 > * **개별 동선 추적:** 4개 동선(1층↔거주층, 주차장↔거주층)의 실시간 소요 시간과 개별 SLA 달성률을 정밀 모니터링합니다.
 > * **DES Event-Driven 구조:** 승객 호출 대기열(Queue)이 쌓이면 엘리베이터가 `호출 → 배정 → 출발층 도착 → 탑승 → 목적지 하차`의 이벤트를 순차적으로 처리합니다.
+> * **시간대별 수요 가중치:** 출근 시간은 `주거층 → 1층/B1`, 퇴근 시간은 `1층/B1 → 주거층` 호출이 높은 확률로 발생하도록 반영합니다.
 > * **Queue 지표 추가:** 모든 운영 전략별로 평균 대기시간, 최대 대기시간, 평균 Queue 길이를 산출합니다.
-> * **표준 물리 참조 및 회생제동 모델:** 기어리스 동기모터(Efficiency 85%) 및 KEPCO 요금제 기준. 탑승 적재량 및 운행 방향에 따른 회생 제동 자가발전 공식을 적용합니다.
+> * **표준 물리 참조 및 회생제동 모델:** 기어리스 동기모터(Efficiency 85%) 및 KEPCO 요금제 기준.
 > * **대조 분석 기능:** 모든 전략의 연산 결과는 기준점인 **'전략 미적용 (랜덤 운행)' 대비 증감률(%)**로 자동 환산됩니다.
 """)
 
@@ -237,6 +238,72 @@ def get_phys_time(dist_m, v_max, accel):
     return 2 * np.sqrt(dist_m / accel)
 
 
+def generate_weighted_trip_by_time(mode_label, start_idx, tot_floors, parking_rate, stairs_floor):
+    residential_min = min(tot_floors - 1, start_idx + stairs_floor + 1)
+    residential_floors = list(range(residential_min, tot_floors))
+
+    if not residential_floors:
+        residential_floors = list(range(start_idx + 1, tot_floors))
+
+    if not residential_floors:
+        residential_floors = [start_idx]
+
+    parking_floor = 0
+    lobby_floor = start_idx
+
+    def pick_residential_floor():
+        return int(random.choice(residential_floors))
+
+    def pick_lobby_or_parking():
+        if random.random() < parking_rate / 100:
+            return parking_floor
+        return lobby_floor
+
+    if mode_label == "출근 시간":
+        if random.random() < 0.80:
+            start = pick_residential_floor()
+            end = pick_lobby_or_parking()
+        else:
+            start = random.randint(0, tot_floors - 1)
+            end = random.randint(0, tot_floors - 1)
+
+    elif mode_label == "퇴근 시간":
+        if random.random() < 0.80:
+            start = pick_lobby_or_parking()
+            end = pick_residential_floor()
+        else:
+            start = random.randint(0, tot_floors - 1)
+            end = random.randint(0, tot_floors - 1)
+
+    elif mode_label == "새벽 시간":
+        if random.random() < 0.60:
+            start = pick_lobby_or_parking()
+            end = pick_residential_floor()
+        else:
+            start = random.randint(0, tot_floors - 1)
+            end = random.randint(0, tot_floors - 1)
+
+    elif mode_label == "저녁 시간":
+        if random.random() < 0.50:
+            start = pick_lobby_or_parking()
+            end = pick_residential_floor()
+        else:
+            start = pick_residential_floor()
+            end = pick_lobby_or_parking()
+
+    else:
+        start = random.randint(0, tot_floors - 1)
+        end = random.randint(0, tot_floors - 1)
+
+    if start == end:
+        if start == lobby_floor:
+            end = pick_residential_floor()
+        else:
+            end = lobby_floor
+
+    return start, end
+
+
 @dataclass
 class EventRequest:
     req_id: int
@@ -259,18 +326,20 @@ class ElevatorAgent:
 
 
 st.header("🚹 DES 이벤트 타임라인 시각화 모니터")
-st.write("실제 이산 사건 시뮬레이션(DES) 로직을 통해 Queue Delay와 이벤트 체인을 시각적으로 확인합니다.")
+st.write("선택한 시간대의 수요 가중치를 반영해 Queue Delay와 이벤트 체인을 시각적으로 확인합니다.")
 
 if st.button("🔄 승객 대기열(Queue) 5건 이벤트 타임라인 시뮬레이션", type="secondary"):
     demo_queue = []
 
     for i in range(5):
         p_count = random.randint(1, 10)
-        start = random.randint(0, total_fs - 1)
-        end = random.randint(0, total_fs - 1)
-
-        while start == end:
-            end = random.randint(0, total_fs - 1)
+        start, end = generate_weighted_trip_by_time(
+            mode_label,
+            idx_1f,
+            total_fs,
+            parking_usage_rate,
+            stairs_floor
+        )
 
         t_sp = random.uniform(0, 60)
         demo_queue.append(EventRequest(i + 1, t_sp, start, end, p_count))
@@ -309,7 +378,7 @@ if st.button("🔄 승객 대기열(Queue) 5건 이벤트 타임라인 시뮬레
         best_el.t_free = req.t_drop + final_door_operating_time
         best_el.current_floor = req.end_floor
 
-    st.write("##### ⏳ 개별 승객의 시간대별 이벤트 처리 결과 (기준 시간 08:00:00)")
+    st.write(f"##### ⏳ 개별 승객의 시간대별 이벤트 처리 결과: {mode_label}")
     base_dt = pd.Timestamp("2026-06-07 08:00:00")
 
     res_data = []
@@ -352,7 +421,8 @@ def simulate_route_esg_sla_des(
     h_penalty,
     start_idx,
     tot_floors,
-    shared_traffic_burst
+    shared_traffic_burst,
+    mode_label
 ):
     if abs(target_start - target_end) <= s_floor and target_start >= start_idx:
         return 5.0, 0.001, {
@@ -368,12 +438,15 @@ def simulate_route_esg_sla_des(
     requests = []
 
     for i in range(num_bg):
-        t_sp = random.uniform(0, 300)
-        s_f = random.randint(0, tot_floors - 1)
-        e_f = random.randint(0, tot_floors - 1)
+        s_f, e_f = generate_weighted_trip_by_time(
+            mode_label,
+            start_idx,
+            tot_floors,
+            p_rate,
+            s_floor
+        )
 
-        if s_f == e_f:
-            e_f = (s_f + 1) % tot_floors
+        t_sp = random.uniform(0, 300)
 
         requests.append({
             "id": f"BG-{i}",
@@ -594,7 +667,8 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
                 high_floor_penalty,
                 idx_1f,
                 total_fs,
-                shared_traffic_burst
+                shared_traffic_burst,
+                mode_label
             )
 
             sla_diff = calc_time - target_sla
@@ -604,19 +678,9 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
             calc_cost = calc_kwh * kepco_rate
             calc_carbon = calc_kwh * 424.0
 
-            placement_text = "-"
-            if (
-                "AI 자동 최적화" in strat_name
-                or strat_name == "고층부/저층부 분할배치"
-                or strat_name == "동적 간격 배치"
-                or strat_name == "사용자 수동 배치"
-                or strat_name == "베이스 스테이션 집중"
-                or strat_name == "홀짝수층 분리 운행"
-                or strat_name == "전략 미적용 (랜덤 운행)"
-            ):
-                placement_text = ", ".join(
-                    [f"EL {chr(65 + i)}:{FLOOR_LABELS[p]}" for i, p in enumerate(config["placements"])]
-                )
+            placement_text = ", ".join(
+                [f"EL {chr(65 + i)}:{FLOOR_LABELS[p]}" for i, p in enumerate(config["placements"])]
+            )
 
             matrix_results.append({
                 "운영 전략": strat_name,
@@ -636,7 +700,6 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
 
     df_matrix = pd.DataFrame(matrix_results)
 
-    # ----------------- Queue 요약 결과 -----------------
     queue_summary = df_matrix.groupby("운영 전략").agg({
         "평균 대기시간": "mean",
         "최대 대기시간": "max",
@@ -688,7 +751,6 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
 
     st.divider()
 
-    # ----------------- [1] 테이블 출력: 동선별 정밀 스코어보드 -----------------
     st.write("### 📈 [동선별 정밀 스코어보드] 운영 전략 × 시나리오 매트릭스 (% 대조)")
 
     final_rows = []
@@ -733,7 +795,6 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
 
     st.dataframe(df_pivot[ordered_cols], use_container_width=True)
 
-    # ----------------- [2] ESG 환경 부하 통합 스코어보드 -----------------
     st.write(f"### 🌿 [ESG 친환경 부하 분석] 전략별 누적 에너지 및 탄소 배출 비교 ({'회생제동 ON' if regen_enabled else '회생제동 OFF'})")
 
     df_esg_summary = df_matrix.groupby("운영 전략").agg({
@@ -770,7 +831,6 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
 
     st.divider()
 
-    # ----------------- [3] 시각화 그래프 파트 -----------------
     st.write("### 📊 전략 평가 핵심 데이터 시각화 분석")
 
     g_col1, g_col2 = st.columns(2)
