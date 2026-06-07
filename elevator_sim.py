@@ -194,6 +194,45 @@ strategies_config["사용자 수동 배치"] = {
     "desc": "연구원 임의 정의 슬롯 배치"
 }
 
+
+# ----------------- [실험용 업그레이드 엔진] Queue + Elevator State + DES -----------------
+from dataclasses import dataclass
+from collections import deque
+
+@dataclass
+class PassengerRequest:
+    request_time: float
+    start_floor: int
+    end_floor: int
+    passengers: int = 1
+
+@dataclass
+class ElevatorState:
+    current_floor: int
+    direction: str = "IDLE"
+    load: int = 0
+
+request_queue = deque()
+
+def enqueue_request(request_time, start_floor, end_floor, passengers=1):
+    request_queue.append(
+        PassengerRequest(request_time, start_floor, end_floor, passengers)
+    )
+
+def process_next_request(elevator_state):
+    if not request_queue:
+        return None
+    req = request_queue.popleft()
+    elevator_state.direction = (
+        "UP" if req.start_floor > elevator_state.current_floor
+        else "DOWN" if req.start_floor < elevator_state.current_floor
+        else "IDLE"
+    )
+    elevator_state.current_floor = req.end_floor
+    elevator_state.load = req.passengers
+    return req
+# ------------------------------------------------------------------------
+
 # ----------------- [4] 물리 엔진 및 회생제동 알고리즘 코어 -----------------
 def get_phys_time(dist_m, v_max, accel):
     if dist_m <= 0: return 0
