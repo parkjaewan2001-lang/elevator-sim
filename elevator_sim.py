@@ -540,15 +540,15 @@ def simulate_route_esg_sla_des(
     return target_time, target_kwh, queue_metrics
 
 
-def build_strategy_timeline(strategy_name, config, mode_label, timeline_seed):
-    random.seed(timeline_seed)
+def build_strategy_timeline(config, saved_mode_label):
+    random.seed(1000)
 
     demo_queue = []
 
     for i in range(8):
         p_count = random.randint(1, 10)
         start, end = generate_weighted_trip_by_time(
-            mode_label,
+            saved_mode_label,
             idx_1f,
             total_fs,
             parking_usage_rate,
@@ -648,6 +648,11 @@ st.info(f"현재 물리 엔진 타겟 상태: **{infra_badge}**")
 if "strategy_results" not in st.session_state:
     st.session_state.strategy_results = None
 
+required_result_keys = {"df_matrix", "mode_label", "strategies_config", "regen_enabled"}
+if st.session_state.strategy_results is not None:
+    if not required_result_keys.issubset(set(st.session_state.strategy_results.keys())):
+        st.session_state.strategy_results = None
+
 if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 산출", type="primary", use_container_width=True):
     np.random.seed(42)
     random.seed(42)
@@ -729,10 +734,10 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
     }
 
 if st.session_state.strategy_results is not None:
-    df_matrix = st.session_state.strategy_results["df_matrix"]
-    saved_mode_label = st.session_state.strategy_results["mode_label"]
-    saved_strategies_config = st.session_state.strategy_results["strategies_config"]
-    saved_regen_enabled = st.session_state.strategy_results["regen_enabled"]
+    df_matrix = st.session_state.strategy_results.get("df_matrix")
+    saved_mode_label = st.session_state.strategy_results.get("mode_label", mode_label)
+    saved_strategies_config = st.session_state.strategy_results.get("strategies_config", strategies_config)
+    saved_regen_enabled = st.session_state.strategy_results.get("regen_enabled", regen_enabled)
 
     queue_summary = df_matrix.groupby("운영 전략").agg({
         "평균 대기시간": "mean",
@@ -847,14 +852,7 @@ if st.session_state.strategy_results is not None:
 
     selected_config = saved_strategies_config[selected_strategy]
     selected_placement_text = format_placements(selected_config["placements"])
-
-    timeline_seed = 1000 + strategy_options.index(selected_strategy) * 17
-    timeline_df = build_strategy_timeline(
-        selected_strategy,
-        selected_config,
-        saved_mode_label,
-        timeline_seed
-    )
+    timeline_df = build_strategy_timeline(selected_config, saved_mode_label)
 
     st.markdown(
         f"#### DES 이벤트 타임라인<br>"
@@ -939,6 +937,7 @@ if st.session_state.strategy_results is not None:
     ).properties(height=330)
 
     st.altair_chart(queue_chart, use_container_width=True)
+
 else:
     st.header("🚹 DES 이벤트 타임라인 시각화 모니터")
     st.info("먼저 `동선별 통합 전략 시뮬레이션 및 대조 데이터 산출` 버튼을 눌러 전략 비교 결과를 생성하면, 최고 성능 전략 또는 선택 전략 기준의 DES 이벤트 타임라인이 표시됩니다.")
