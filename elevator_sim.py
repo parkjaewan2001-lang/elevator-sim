@@ -14,9 +14,9 @@ st.subheader("⚡ 동선별 타임라인·SLA 달성률 및 회생제동 기반 
 st.markdown("""
 > 💡 **Simulation Methodology (연구 방법론):**
 > * **개별 동선 추적:** 4개 동선(1층↔거주층, 주차장↔거주층)의 실시간 소요 시간과 개별 SLA 달성률을 정밀 모니터링합니다.
-> * **표준 물리 참조 및 회생제동 모델:** 본 시스템은 기어리스 동기모터(Efficiency 85%) 및 KEPCO 공동주택용 종합계약 단가를 기준으로 설계된 **'표준 물리 참조 모델'**을 사용합니다. 특히 현대 신축 아파트의 필수 기술인 **회생 제동(Regenerative Braking)** 물리 공식과 함께 **포아송 분포 확률 트래픽**을 반영하여 자가발전 전력 상쇄 효과 및 현실적 대기 지연을 정밀하게 추적합니다.
-> * **대조 분석 기능 추가:** 모든 운영 전략의 연산 결과는 기준점인 **'전략 미적용 (랜덤 운행)' 대비 증감률(%)**로 자동 환산되어 알고리즘의 우수성을 정량적으로 증명합니다.
-> * **[NEW] DES Queue & State 모델:** 1~10명 단위의 승객 대기열(Queue)을 생성하고, 엘리베이터의 실제 상태(빈차/부분만차/만차)를 실시간 추적합니다.
+> * **[NEW] DES Event-Driven 구조:** 확률 수식이 아닌 실제 이산 사건 시뮬레이션(DES)을 적용했습니다. 승객 호출 대기열(Queue)이 쌓이면 엘리베이터가 `호출 ➡️ 배정 ➡️ 출발층 도착 ➡️ 탑승 ➡️ 목적지 하차`의 이벤트를 순차적으로 처리하며 연쇄적인 대기 지연(Queue Delay)을 완벽하게 모사합니다.
+> * **표준 물리 참조 및 회생제동 모델:** 기어리스 동기모터(Efficiency 85%) 및 KEPCO 요금제 기준. 탑승 적재량 및 운행 방향에 따른 회생 제동 자가발전 공식을 적용합니다.
+> * **대조 분석 기능 추가:** 모든 전략의 연산 결과는 기준점인 **'전략 미적용 (랜덤 운행)' 대비 증감률(%)**로 자동 환산됩니다.
 """)
 
 # ----------------- [2] SIDEBAR: 설정 변수 -----------------
@@ -198,91 +198,7 @@ strategies_config["사용자 수동 배치"] = {
     "desc": "연구원 임의 정의 슬롯 배치"
 }
 
-# ----------------- [NEW] Queue + Elevator State + DES -----------------
-@dataclass
-class PassengerRequest:
-    request_id: int
-    request_time: float
-    start_floor: int
-    end_floor: int
-    passengers: int = 1
-
-@dataclass
-class ElevatorState:
-    id_name: str
-    current_floor: int
-    direction: str = "IDLE"
-    passengers_loaded: int = 0
-    load_status: str = "빈차"
-    
-    def update_load_status(self):
-        if self.passengers_loaded <= 2:
-            self.load_status = "🟢 빈차 (0~2명)"
-        elif self.passengers_loaded <= 7:
-            self.load_status = "🟡 부분만차 (3~7명)"
-        else:
-            self.load_status = "🔴 만차 (8명 이상)"
-
-# 전역 큐 생성 함수
-def generate_random_queue(num_requests=5):
-    q = deque()
-    for i in range(num_requests):
-        # 1~10명 무작위 탑승 모델
-        p_count = random.randint(1, 10)
-        start = random.randint(0, total_fs - 1)
-        end = random.randint(0, total_fs - 1)
-        while start == end:
-            end = random.randint(0, total_fs - 1)
-        q.append(PassengerRequest(i+1, 0.0, start, end, p_count))
-    return q
-
-st.header("🚹 DES 기반 대기열(Queue) & 적재율 추적 시스템")
-st.write("승객 1~10명 호출 모델이 Queue에 적재되며, 엘리베이터가 할당될 때마다 상태(빈차/부분만차/만차)가 실시간 업데이트됩니다.")
-
-if st.button("🔄 새로운 승객 대기열(Queue) 5건 생성 및 상태 시뮬레이션"):
-    demo_queue = generate_random_queue(5)
-    
-    # 전략 미적용 초기 배치 상태 불러오기
-    current_placements = strategies_config["전략 미적용 (랜덤 운행)"]["placements"]
-    el_states = [ElevatorState(f"EL-{chr(65+i)}", current_placements[i]) for i in range(num_elevators)]
-    
-    col_q, col_s = st.columns(2)
-    
-    with col_q:
-        st.write("##### ⏳ 현재 승객 대기열 (Queue)")
-        q_data = []
-        for req in demo_queue:
-            q_data.append({
-                "호출 ID": f"REQ-{req.request_id}",
-                "출발 층": FLOOR_LABELS[req.start_floor],
-                "목적 층": FLOOR_LABELS[req.end_floor],
-                "승객 수": f"{req.passengers}명"
-            })
-        st.dataframe(pd.DataFrame(q_data), use_container_width=True)
-        
-    with col_s:
-        st.write("##### ⚡ 엘리베이터 상태 (State)")
-        # 큐를 순회하며 엘리베이터에 랜덤 할당 (간단한 DES 처리)
-        for req in demo_queue:
-            target_el = random.choice(el_states) # 호출 접수 엘리베이터
-            target_el.current_floor = req.end_floor
-            target_el.passengers_loaded = req.passengers
-            target_el.direction = "UP" if req.end_floor > req.start_floor else "DOWN"
-            target_el.update_load_status()
-            
-        s_data = []
-        for el in el_states:
-            s_data.append({
-                "엘리베이터": el.id_name,
-                "현재 위치": FLOOR_LABELS[el.current_floor],
-                "운행 방향": el.direction,
-                "탑승 인원": f"{el.passengers_loaded}명",
-                "적재율 상태": el.load_status
-            })
-        st.dataframe(pd.DataFrame(s_data), use_container_width=True)
-st.divider()
-
-# ----------------- [4] 물리 엔진 및 회생제동 알고리즘 코어 -----------------
+# ----------------- [NEW] Event-Driven DES Queue & Timeline -----------------
 def get_phys_time(dist_m, v_max, accel):
     if dist_m <= 0: return 0
     d_accel = (v_max**2) / (2 * accel)
@@ -290,89 +206,219 @@ def get_phys_time(dist_m, v_max, accel):
         return (2 * (v_max / accel)) + (dist_m - 2 * d_accel) / v_max
     return 2 * np.sqrt(dist_m / accel)
 
-def simulate_route_esg_sla(start, end, placements, logic, cong, is_deliv, eff, base_t, fixed_t, p_rate, s_floor, households, is_regen_on, p_lambda, h_penalty, start_idx, tot_floors, shared_traffic_burst=None):
-    if abs(start - end) <= s_floor and start >= start_idx:
+@dataclass
+class EventRequest:
+    req_id: int
+    t_spawn: float
+    start_floor: int
+    end_floor: int
+    passengers: int = 1
+    t_assign: float = 0.0
+    t_arrive: float = 0.0
+    t_board: float = 0.0
+    t_drop: float = 0.0
+    assigned_el: str = ""
+
+@dataclass
+class ElevatorAgent:
+    id_name: str
+    current_floor: float
+    t_free: float = 0.0
+
+st.header("🚹 DES 이벤트 타임라인 시각화 모니터")
+st.write("실제 이산 사건 시뮬레이션(DES) 로직을 통해 앞선 호출이 다음 호출에 미치는 큐 지연(Queue Delay)과 이벤트 체인을 시각적으로 확인합니다.")
+
+if st.button("🔄 승객 대기열(Queue) 5건 이벤트 타임라인 시뮬레이션", type="secondary"):
+    demo_queue = []
+    for i in range(5):
+        p_count = random.randint(1, 10)
+        start = random.randint(0, total_fs - 1)
+        end = random.randint(0, total_fs - 1)
+        while start == end: 
+            end = random.randint(0, total_fs - 1)
+        # 1분(60초) 내에 무작위 호출 발생
+        t_sp = random.uniform(0, 60)
+        demo_queue.append(EventRequest(i+1, t_sp, start, end, p_count))
+    
+    # 순차적 이벤트 처리를 위해 호출 시간순 정렬
+    demo_queue.sort(key=lambda x: x.t_spawn)
+    
+    # 전략 미적용 초기 배치 상태 불러오기
+    current_placements = strategies_config["전략 미적용 (랜덤 운행)"]["placements"]
+    el_agents = [ElevatorAgent(f"EL-{chr(65+i)}", float(current_placements[i])) for i in range(num_elevators)]
+    
+    # DES Event Dispatch Loop
+    for req in demo_queue:
+        best_el = None
+        min_arrive_t = float('inf')
+        
+        for el in el_agents:
+            # 엘리베이터가 앞선 작업을 마치고 비워지는 시간 vs 현재 호출 시간
+            t_start = max(el.t_free, req.t_spawn)
+            dist_to_req = abs(el.current_floor - req.start_floor) * floor_height
+            t_arr = t_start + get_phys_time(dist_to_req, max_velocity, acceleration)
+            
+            if t_arr < min_arrive_t:
+                min_arrive_t = t_arr
+                best_el = el
+                
+        # 확정된 할당 엘리베이터의 이벤트 타임라인 기록
+        req.assigned_el = best_el.id_name
+        req.t_assign = max(best_el.t_free, req.t_spawn)
+        
+        dist1 = abs(best_el.current_floor - req.start_floor) * floor_height
+        req.t_arrive = req.t_assign + get_phys_time(dist1, max_velocity, acceleration)
+        
+        req.t_board = req.t_arrive + final_door_operating_time
+        
+        dist2 = abs(req.start_floor - req.end_floor) * floor_height
+        req.t_drop = req.t_board + get_phys_time(dist2, max_velocity, acceleration)
+        
+        # 엘리베이터 상태 동기화 (다음 승객을 받을 준비가 되는 시간)
+        best_el.t_free = req.t_drop + final_door_operating_time
+        best_el.current_floor = req.end_floor
+        
+    st.write("##### ⏳ 개별 승객의 시간대별 이벤트 처리 결과 (기준 시간 08:00:00)")
+    base_dt = pd.Timestamp("2026-06-07 08:00:00")
+    
+    res_data = []
+    for req in demo_queue:
+        def fmt(s): return (base_dt + pd.Timedelta(seconds=int(s))).strftime("%H:%M:%S")
+        res_data.append({
+            "호출 ID": f"REQ-{req.req_id}",
+            "이동 동선": f"{FLOOR_LABELS[req.start_floor]} ➡️ {FLOOR_LABELS[req.end_floor]}",
+            "배정 E/V": req.assigned_el,
+            "1. 호출 발생": fmt(req.t_spawn),
+            "2. E/V 배정": fmt(req.t_assign),
+            "3. 도착(문열림)": fmt(req.t_arrive),
+            "4. 탑승 완료": fmt(req.t_board),
+            "5. 목적지 하차": fmt(req.t_drop)
+        })
+    st.dataframe(pd.DataFrame(res_data), use_container_width=True)
+st.divider()
+
+# ----------------- [4] 물리 엔진 및 회생제동 알고리즘 코어 (DES 연동) -----------------
+def simulate_route_esg_sla_des(target_start, target_end, placements, logic, cong, is_deliv, eff, base_t, fixed_t, p_rate, s_floor, households, is_regen_on, p_lambda, h_penalty, start_idx, tot_floors, shared_traffic_burst):
+    """
+    해석적 확률 수식을 버리고, 5분(300초)간의 백그라운드 트래픽을 생성한 뒤
+    타겟 승객이 겪게 되는 순차적 대기 지연과 실제 소비 에너지를 산출하는 DES 엔진입니다.
+    """
+    if abs(target_start - target_end) <= s_floor and target_start >= start_idx:
         return 5.0, 0.001
-    
-    congestion_weights = {"매우 쾌적": 0.7, "쾌적": 0.9, "보통": 1.1, "혼잡": 1.8, "매우 혼잡": 2.5}
-    h_weight = 1.0 + (households - 1) * 0.05
-    w = congestion_weights[cong] * h_weight
-    
-    if is_deliv:
-        w = w * 1.5
-        delivery_stops_penalty = 2.4
-        door_holding_penalty = 1.8
-    else:
-        delivery_stops_penalty = 1.0
-        door_holding_penalty = 1.0
-    
-    avail = [i for i in range(num_elevators)]
-    if num_elevators > 1:
-        if "홀짝" in logic:
-            avail = [i for i in avail if start <= start_idx or (i % 2 == 0 and start % 2 != 0) or (i % 2 != 0 and start % 2 == 0)]
-        elif "분할" in logic:
-            mid = (tot_floors + start_idx) // 2
-            avail = [i for i in avail if start <= start_idx or (i < num_elevators/2 and start <= mid) or (i >= num_elevators/2 and start > mid)]
-    if not avail: avail = [0]
-    
-    chosen_el_idx = avail[0]
-    min_dist_m = abs(placements[chosen_el_idx] - start) * floor_height
-    wait_t = get_phys_time(min_dist_m, max_velocity, acceleration)
-    
-    if logic == "베이스 스테이션 집중" and start != start_idx:
-        min_dist_m += (abs(end - start_idx) * floor_height) 
-
-    if start > start_idx:
-        w_floor = 1.0 + ((start - start_idx) / (tot_floors - start_idx)) * h_penalty
-    else:
-        w_floor = 1.0
-
-    traffic_burst = shared_traffic_burst if shared_traffic_burst is not None else np.random.poisson(p_lambda)
-    poisson_multiplier = 1.0 + (traffic_burst * 0.05) 
-    wait_t = wait_t * w_floor * poisson_multiplier
-
-    move_dist_m = abs(start - end) * floor_height
-    move_t = get_phys_time(move_dist_m, max_velocity, acceleration)
-    
-    if start < start_idx or end < start_idx:
-        wait_t = wait_t * (1 - (p_rate / 100) * 0.4)
-    
+        
     pure_dwell = max(0.0, base_t - fixed_t)
     door_eff_t = fixed_t + (pure_dwell * (1 - (eff/100)))
-    if start == start_idx: 
-        door_eff_t = door_eff_t * 1.2
+    
+    # 1. 시뮬레이션 환경 (5분간의 백그라운드 트래픽 큐 생성)
+    num_bg = int(shared_traffic_burst * 5)
+    requests = []
+    for i in range(num_bg):
+        t_sp = random.uniform(0, 300)
+        s_f = random.randint(0, tot_floors - 1)
+        e_f = random.randint(0, tot_floors - 1)
+        if s_f == e_f: e_f = (s_f + 1) % tot_floors
+        requests.append({'id': f'BG-{i}', 't_sp': t_sp, 'start': s_f, 'end': e_f, 'is_target': False})
         
-    final_time = (wait_t + move_t + (door_eff_t * w)) * (1.3 if is_deliv else 1.0)
+    # 2. 중간 시점(t=150)에 측정용 Target Request (SLA 시나리오) 투입
+    requests.append({'id': 'TARGET', 't_sp': 150.0, 'start': target_start, 'end': target_end, 'is_target': True})
+    requests.sort(key=lambda x: x['t_sp']) # 타임라인 순 정렬
     
-    total_moving_dist = min_dist_m + move_dist_m
-    moving_time_pure = get_phys_time(total_moving_dist, max_velocity, acceleration)
-    energy_move_base = ((500 * 9.8 * max_velocity * moving_time_pure) / (0.85 * 3600 * 1000)) * delivery_stops_penalty
+    # 3. 엘리베이터 에이전트 생성
+    elevs = [{'id': i, 't_free': 0.0, 'curr_f': float(placements[i])} for i in range(len(placements))]
     
-    is_upward = (end > start)
-    is_heavy_load = (w >= 1.2 or is_deliv)
+    # 동선 제한 로직 판별기
+    def is_elev_allowed(elev_idx, req_start):
+        if "홀짝" in logic:
+            if req_start > start_idx: return ((req_start - start_idx) % 2 != 0) == (elev_idx % 2 != 0)
+        elif "분할" in logic:
+            mid = (tot_floors + start_idx) // 2
+            if req_start > start_idx: return (req_start > mid) == (elev_idx >= len(placements)/2)
+        return True
+
+    congestion_weights = {"매우 쾌적": 0.7, "쾌적": 0.9, "보통": 1.1, "혼잡": 1.8, "매우 혼잡": 2.5}
+    w = congestion_weights[cong] * (1.0 + (households - 1) * 0.05)
+    d_eff = door_eff_t * w
+    if is_deliv: d_eff *= 1.5
+
+    target_time = 0.0
+    target_kwh = 0.0
     
-    regen_factor = 1.0
-    if is_regen_on:
-        if is_upward and not is_heavy_load:
-            regen_factor = -0.35
-        elif not is_upward and is_heavy_load:
-            regen_factor = -0.40
-        elif is_upward and is_heavy_load:
-            regen_factor = 1.30
-    else:
-        if is_upward and is_heavy_load:
-            regen_factor = 1.30
+    # 4. Event Dispatch Loop (전체 트래픽 소화)
+    for req in requests:
+        best_el = None
+        min_arrive_t = float('inf')
+        
+        for el in elevs:
+            if not is_elev_allowed(el['id'], req['start']):
+                continue
+            
+            t_start = max(el['t_free'], req['t_sp'])
+            if logic == "베이스 스테이션 집중" and el['t_free'] <= req['t_sp']:
+                dist1 = abs(start_idx - req['start']) * floor_height
+            else:
+                dist1 = abs(el['curr_f'] - req['start']) * floor_height
+                
+            t_arr = t_start + get_phys_time(dist1, max_velocity, acceleration)
+            
+            # 패널티 적용
+            if req['start'] > start_idx: t_arr += (req['start'] - start_idx) * h_penalty * 0.2
+            if req['start'] < start_idx or req['end'] < start_idx: t_arr -= (p_rate / 100) * 1.0
+            
+            if t_arr < min_arrive_t:
+                min_arrive_t = t_arr
+                best_el = el
+                
+        if best_el is None: best_el = elevs[0]
+        
+        # 실제 이벤트 발생 및 타임라인 연장
+        t_assign = max(best_el['t_free'], req['t_sp'])
+        if logic == "베이스 스테이션 집중" and best_el['t_free'] <= req['t_sp']:
+            dist1 = abs(start_idx - req['start']) * floor_height
         else:
-            regen_factor = 1.05
+            dist1 = abs(best_el['curr_f'] - req['start']) * floor_height
+            
+        move1_t = get_phys_time(dist1, max_velocity, acceleration)
+        t_arrive = t_assign + move1_t
+        t_board = t_arrive + d_eff
         
-    energy_move_final = energy_move_base * regen_factor
-    energy_door = 0.001 * w * door_holding_penalty
-    total_kwh = energy_move_final + energy_door
-    
-    return final_time, total_kwh
+        dist2 = abs(req['start'] - req['end']) * floor_height
+        move2_t = get_phys_time(dist2, max_velocity, acceleration)
+        
+        t_drop = t_board + move2_t
+        t_finish = t_drop + d_eff
+        
+        # 에이전트 업데이트
+        best_el['curr_f'] = float(req['end'])
+        best_el['t_free'] = t_finish
+        
+        # 측정용 승객(Target)일 경우에만 실제 시간과 에너지 데이터 축적
+        if req['is_target']:
+            target_time = t_finish - req['t_sp']
+            
+            e_m1 = ((500 * 9.8 * max_velocity * move1_t) / (0.85 * 3600 * 1000))
+            e_m2 = ((500 * 9.8 * max_velocity * move2_t) / (0.85 * 3600 * 1000))
+            if is_deliv: e_m1 *= 2.4; e_m2 *= 2.4
+            
+            rf1, rf2 = 1.05, 1.05
+            if is_regen_on:
+                is_up1 = req['start'] > best_el['curr_f']
+                rf1 = -0.35 if is_up1 else 1.05
+                
+                is_up2 = req['end'] > req['start']
+                is_heavy = (w >= 1.2 or is_deliv)
+                if is_up2 and not is_heavy: rf2 = -0.35
+                elif not is_up2 and is_heavy: rf2 = -0.40
+                elif is_up2 and is_heavy: rf2 = 1.30
+                else: rf2 = 1.0
+            else:
+                if (req['end'] > req['start']) and (w >= 1.2 or is_deliv): rf2 = 1.30
+                
+            target_kwh = (e_m1 * rf1) + (e_m2 * rf2) + (0.001 * w * (1.8 if is_deliv else 1.0))
+            
+    return target_time, target_kwh
 
 # ----------------- [5] 통합 가동 및 동선별 매트릭스 도출 -----------------
-st.subheader("🌐 시뮬레이션 환경 조건 가동")
+st.subheader("🌐 통합 DES 환경 가동")
 c_env1, c_env2 = st.columns(2)
 with c_env1: 
     congestion = st.radio("건물 내부 혼잡도 세부 선택", options=["매우 쾌적", "쾌적", "보통", "혼잡", "매우 혼잡"], index=2, horizontal=True)
@@ -383,7 +429,8 @@ infra_badge = "🟢 회생제동 인버터 활성화 모드 (신축형)" if rege
 st.info(f"현재 물리 엔진 타겟 상태: **{infra_badge}**")
 
 if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 산출", type="primary", use_container_width=True):
-    np.random.seed(42)  # 재현성 고정
+    np.random.seed(42)  
+    random.seed(42)
     avg_res_f = int(idx_1f + (max_f - 1) * 0.7)
     
     scenarios = {
@@ -396,13 +443,16 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
     matrix_results = []
     
     for s_name, (start, end, target_sla) in scenarios.items():
-        shared_traffic_burst = np.random.poisson(poisson_lambda)  # 모든 전략이 동일 교통량 사용
+        # 모든 전략이 동일한 백그라운드 교통량을 견디도록 교통량 고정
+        shared_traffic_burst = np.random.poisson(poisson_lambda)  
+        
         for strat_name, config in strategies_config.items():
             eff_param = button_efficiency if strat_name != "전략 미적용 (랜덤 운행)" else 0
             p_rate_param = parking_usage_rate if strat_name != "전략 미적용 (랜덤 운행)" else 0
             s_floor_param = stairs_floor if strat_name != "전략 미적용 (랜덤 운행)" else 0
             
-            calc_time, calc_kwh = simulate_route_esg_sla(
+            # DES 기반 엔진 호출
+            calc_time, calc_kwh = simulate_route_esg_sla_des(
                 start, end, config["placements"], config["logic"], 
                 congestion, delivery_mode, eff_param, base_door_time, fixed_door_moving_time,
                 p_rate_param, s_floor_param, households_per_floor, regen_enabled,
