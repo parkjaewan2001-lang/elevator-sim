@@ -678,9 +678,12 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
             calc_cost = calc_kwh * kepco_rate
             calc_carbon = calc_kwh * 424.0
 
-            placement_text = ", ".join(
-                [f"EL {chr(65 + i)}:{FLOOR_LABELS[p]}" for i, p in enumerate(config["placements"])]
-            )
+            if strat_name == "전략 미적용 (랜덤 운행)":
+                placement_text = "-"
+            else:
+                placement_text = ", ".join(
+                    [f"EL {chr(65 + i)}:{FLOOR_LABELS[p]}" for i, p in enumerate(config["placements"])]
+                )
 
             matrix_results.append({
                 "운영 전략": strat_name,
