@@ -2,6 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
+from dataclasses import dataclass
+from collections import deque
+import random
 
 # ----------------- [1] UI 및 페이지 전역 설정 -----------------
 st.set_page_config(page_title="Elevator ESG & SLA Lab", layout="wide")
@@ -13,6 +16,7 @@ st.markdown("""
 > * **개별 동선 추적:** 4개 동선(1층↔거주층, 주차장↔거주층)의 실시간 소요 시간과 개별 SLA 달성률을 정밀 모니터링합니다.
 > * **표준 물리 참조 및 회생제동 모델:** 본 시스템은 기어리스 동기모터(Efficiency 85%) 및 KEPCO 공동주택용 종합계약 단가를 기준으로 설계된 **'표준 물리 참조 모델'**을 사용합니다. 특히 현대 신축 아파트의 필수 기술인 **회생 제동(Regenerative Braking)** 물리 공식과 함께 **포아송 분포 확률 트래픽**을 반영하여 자가발전 전력 상쇄 효과 및 현실적 대기 지연을 정밀하게 추적합니다.
 > * **대조 분석 기능 추가:** 모든 운영 전략의 연산 결과는 기준점인 **'전략 미적용 (랜덤 운행)' 대비 증감률(%)**로 자동 환산되어 알고리즘의 우수성을 정량적으로 증명합니다.
+> * **[NEW] DES Queue & State 모델:** 1~10명 단위의 승객 대기열(Queue)을 생성하고, 엘리베이터의 실제 상태(빈차/부분만차/만차)를 실시간 추적합니다.
 """)
 
 # ----------------- [2] SIDEBAR: 설정 변수 -----------------
@@ -194,13 +198,10 @@ strategies_config["사용자 수동 배치"] = {
     "desc": "연구원 임의 정의 슬롯 배치"
 }
 
-
-# ----------------- [실험용 업그레이드 엔진] Queue + Elevator State + DES -----------------
-from dataclasses import dataclass
-from collections import deque
-
+# ----------------- [NEW] Queue + Elevator State + DES -----------------
 @dataclass
 class PassengerRequest:
+    request_id: int
     request_time: float
     start_floor: int
     end_floor: int
@@ -208,30 +209,78 @@ class PassengerRequest:
 
 @dataclass
 class ElevatorState:
+    id_name: str
     current_floor: int
     direction: str = "IDLE"
-    load: int = 0
+    passengers_loaded: int = 0
+    load_status: str = "빈차"
+    
+    def update_load_status(self):
+        if self.passengers_loaded <= 2:
+            self.load_status = "🟢 빈차 (0~2명)"
+        elif self.passengers_loaded <= 7:
+            self.load_status = "🟡 부분만차 (3~7명)"
+        else:
+            self.load_status = "🔴 만차 (8명 이상)"
 
-request_queue = deque()
+# 전역 큐 생성 함수
+def generate_random_queue(num_requests=5):
+    q = deque()
+    for i in range(num_requests):
+        # 1~10명 무작위 탑승 모델
+        p_count = random.randint(1, 10)
+        start = random.randint(0, total_fs - 1)
+        end = random.randint(0, total_fs - 1)
+        while start == end:
+            end = random.randint(0, total_fs - 1)
+        q.append(PassengerRequest(i+1, 0.0, start, end, p_count))
+    return q
 
-def enqueue_request(request_time, start_floor, end_floor, passengers=1):
-    request_queue.append(
-        PassengerRequest(request_time, start_floor, end_floor, passengers)
-    )
+st.header("🚹 DES 기반 대기열(Queue) & 적재율 추적 시스템")
+st.write("승객 1~10명 호출 모델이 Queue에 적재되며, 엘리베이터가 할당될 때마다 상태(빈차/부분만차/만차)가 실시간 업데이트됩니다.")
 
-def process_next_request(elevator_state):
-    if not request_queue:
-        return None
-    req = request_queue.popleft()
-    elevator_state.direction = (
-        "UP" if req.start_floor > elevator_state.current_floor
-        else "DOWN" if req.start_floor < elevator_state.current_floor
-        else "IDLE"
-    )
-    elevator_state.current_floor = req.end_floor
-    elevator_state.load = req.passengers
-    return req
-# ------------------------------------------------------------------------
+if st.button("🔄 새로운 승객 대기열(Queue) 5건 생성 및 상태 시뮬레이션"):
+    demo_queue = generate_random_queue(5)
+    
+    # 전략 미적용 초기 배치 상태 불러오기
+    current_placements = strategies_config["전략 미적용 (랜덤 운행)"]["placements"]
+    el_states = [ElevatorState(f"EL-{chr(65+i)}", current_placements[i]) for i in range(num_elevators)]
+    
+    col_q, col_s = st.columns(2)
+    
+    with col_q:
+        st.write("##### ⏳ 현재 승객 대기열 (Queue)")
+        q_data = []
+        for req in demo_queue:
+            q_data.append({
+                "호출 ID": f"REQ-{req.request_id}",
+                "출발 층": FLOOR_LABELS[req.start_floor],
+                "목적 층": FLOOR_LABELS[req.end_floor],
+                "승객 수": f"{req.passengers}명"
+            })
+        st.dataframe(pd.DataFrame(q_data), use_container_width=True)
+        
+    with col_s:
+        st.write("##### ⚡ 엘리베이터 상태 (State)")
+        # 큐를 순회하며 엘리베이터에 랜덤 할당 (간단한 DES 처리)
+        for req in demo_queue:
+            target_el = random.choice(el_states) # 호출 접수 엘리베이터
+            target_el.current_floor = req.end_floor
+            target_el.passengers_loaded = req.passengers
+            target_el.direction = "UP" if req.end_floor > req.start_floor else "DOWN"
+            target_el.update_load_status()
+            
+        s_data = []
+        for el in el_states:
+            s_data.append({
+                "엘리베이터": el.id_name,
+                "현재 위치": FLOOR_LABELS[el.current_floor],
+                "운행 방향": el.direction,
+                "탑승 인원": f"{el.passengers_loaded}명",
+                "적재율 상태": el.load_status
+            })
+        st.dataframe(pd.DataFrame(s_data), use_container_width=True)
+st.divider()
 
 # ----------------- [4] 물리 엔진 및 회생제동 알고리즘 코어 -----------------
 def get_phys_time(dist_m, v_max, accel):
