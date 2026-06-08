@@ -98,45 +98,45 @@ with c_time:
     current_is_deliv = True if mode_label == "새벽 시간" else False
     
     if "경부하" in mode_selection:
-...         kepco_rate = 78.0
-...     elif "중부하" in mode_selection:
-...         kepco_rate = 132.0
-...     else:
-...         kepco_rate = 195.0
-... 
-... with c_custom:
-...     st.write("##### ✍️ 사용자 수동 배치 설정")
-...     m_cols = st.columns(num_elevators)
-...     manual_placements = []
-...     for i in range(num_elevators):
-...         with m_cols[i]:
-...             val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_percent_metrics_{i}")
-...             manual_placements.append(val)
-... 
-... st.divider()
-... 
-... # --- 운영 전략 대기 포지션 맵 빌드 ---
-... strategies_config = {}
-... np.random.seed(42) 
-... 
-... strategies_config["전략 미적용 (랜덤 운행)"] = {
-...     "placements": list(np.random.randint(0, total_fs, num_elevators)), 
-...     "logic": "자유 운행", 
-...     "desc": "무작위 방치 상태"
-... }
-... 
-... oe_placements = []
-... for i in range(num_elevators):
-...     if num_elevators == 1:
-...         oe_placements.append(int(np.random.randint(0, total_fs)))
-...     elif i % 2 == 0:
-...         odd_floors = [f for f in range(total_fs) if f <= idx_1f or (f - idx_1f) % 2 != 0]
-...         oe_placements.append(int(np.random.choice(odd_floors)))
-...     else:
-...         even_floors = [f for f in range(total_fs) if f <= idx_1f or (f - idx_1f) % 2 == 0]
-...         oe_placements.append(int(np.random.choice(even_floors)))
-... strategies_config["홀짝수층 분리 운행"] = {
-...     "placements": oe_placements, 
+        kepco_rate = 78.0
+    elif "중부하" in mode_selection:
+        kepco_rate = 132.0
+    else:
+        kepco_rate = 195.0
+
+with c_custom:
+    st.write("##### ✍️ 사용자 수동 배치 설정")
+    m_cols = st.columns(num_elevators)
+    manual_placements = []
+    for i in range(num_elevators):
+        with m_cols[i]:
+            val = st.selectbox(f"EL {chr(65+i)}", options=range(total_fs), format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_percent_metrics_{i}")
+            manual_placements.append(val)
+
+st.divider()
+
+# --- 운영 전략 대기 포지션 맵 빌드 ---
+strategies_config = {}
+np.random.seed(42) 
+
+strategies_config["전략 미적용 (랜덤 운행)"] = {
+    "placements": list(np.random.randint(0, total_fs, num_elevators)), 
+    "logic": "자유 운행", 
+    "desc": "무작위 방치 상태"
+}
+
+oe_placements = []
+for i in range(num_elevators):
+    if num_elevators == 1:
+        oe_placements.append(int(np.random.randint(0, total_fs)))
+    elif i % 2 == 0:
+        odd_floors = [f for f in range(total_fs) if f <= idx_1f or (f - idx_1f) % 2 != 0]
+        oe_placements.append(int(np.random.choice(odd_floors)))
+    else:
+        even_floors = [f for f in range(total_fs) if f <= idx_1f or (f - idx_1f) % 2 == 0]
+        oe_placements.append(int(np.random.choice(even_floors)))
+strategies_config["홀짝수층 분리 운행"] = {
+    "placements": oe_placements, 
     "logic": "홀짝 운행", 
     "desc": "홀/짝수층 전담 정차로 감속 손실 방지"
 }
@@ -467,16 +467,14 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
             calc_cost = calc_kwh * kepco_rate
             calc_carbon = calc_kwh * 424.0
 
-            # AI 배치층 컬럼은 실제 '배치 전략'에만 표시
-            # 홀짝수층 분리 운행은 전담 운행 로직이므로 공란 처리
-            placement_text = ""
-            if strat_name in [
-                "AI 자동 최적화 배치",
-                "고층부/저층부 분할배치",
-                "동적 간격 배치",
-                "사용자 수동 배치",
-                "베이스 스테이션 집중"
-            ]:
+            placement_text = "-"
+            if (
+                "AI 자동 최적화" in strat_name
+                or strat_name == "고층부/저층부 분할배치"
+                or strat_name == "동적 간격 배치"
+                or strat_name == "사용자 수동 배치"
+                or strat_name == "베이스 스테이션 집중"
+            ):
                 placement_text = ", ".join(
                     [f"EL {chr(65+i)}:{FLOOR_LABELS[p]}" for i, p in enumerate(config["placements"])]
                 )
