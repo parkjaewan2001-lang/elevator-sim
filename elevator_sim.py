@@ -4,7 +4,6 @@ import numpy as np
 import altair as alt
 from dataclasses import dataclass
 import random
-import scipy.stats as stats
 from copy import deepcopy
 
 # ----------------- [1] UI 및 페이지 전역 설정 -----------------
@@ -20,7 +19,7 @@ st.markdown("""
 > * **Queue 지표 추가:** 모든 운영 전략별로 평균 대기시간, 최대 대기시간, 평균 Queue 길이를 산출합니다.
 > * **표준 물리 참조 및 회생제동 모델:** 기어리스 동기모터(Efficiency 85%) 및 KEPCO 요금제 기준.
 > * **[NEW] 몬테카를로 시뮬레이션 & 통계 분석:** 각 전략에 대해 지정된 N회 반복 시뮬레이션을 수행하여, 평균, 표준편차, 95% 신뢰구간 및 P90/P95/P99 지표를 산출합니다.
-> * **[NEW] 종합 KPI 스코어링:** $Score = 0.4 \times SLA + 0.3 \times \Delta Wait + 0.2 \times \Delta Queue + 0.1 \times \Delta ESG$를 통해 전략 순위를 평가합니다.
+> * **[NEW] 종합 KPI 스코어링:** $Score = 0.4 \\times SLA + 0.3 \\times \Delta Wait + 0.2 \\times \Delta Queue + 0.1 \\times \Delta ESG$를 통해 전략 순위를 평가합니다.
 > * **[NEW] 휴리스틱 AI 전략 탐색:** 500개의 무작위 배치 조합 중 예상 대기 거리가 가장 짧은 상위 5개를 자동 선별하여 기존 전략과 대조합니다.
 """)
 
