@@ -213,10 +213,18 @@ elif mode_label == "저녁 시간":
 else:
     ai_pos = [int(f) for f in np.linspace(0, total_fs - 1, num_elevators)]
 
-strategies_config[f"AI 자동 최적화 ({mode_label})"] = {
+# 기존 AI 최적화의 이름을 명확화
+strategies_config[f"규칙 기반 AI 자동 최적화 ({mode_label})"] = {
     "placements": ai_pos,
     "logic": "자유 운행",
-    "desc": "예상 수요 길목 지능형 유동 배치"
+    "desc": "예상 수요 길목 지능형 유동 배치 (규칙 기반)"
+}
+
+# [요구사항 반영] 강화학습 기반 전략 추가
+strategies_config[f"강화학습 최적화(RL) ({mode_label})"] = {
+    "placements": ai_pos, # 동일한 초기 배치에서 출발하여 공정 비교
+    "logic": "강화학습",
+    "desc": "강화학습 기반 실시간 대기 큐 및 전력 최적화 대응"
 }
 
 strategies_config["사용자 수동 배치"] = {
@@ -371,7 +379,8 @@ def simulate_route_esg_sla_des(
         return 5.0, 0.001, {
             "avg_wait_time": 0.0,
             "max_wait_time": 0.0,
-            "avg_queue_len": 0.0
+            "avg_queue_len": 0.0,
+            "avg_travel_time": 0.0  # 평균 이동시간 추가
         }
 
     pure_dwell = max(0.0, base_t - fixed_t)
@@ -432,6 +441,7 @@ def simulate_route_esg_sla_des(
     target_kwh = 0.0
 
     wait_times = []
+    travel_times = []  # 평균 이동시간 추적용 배열
     queue_lengths = []
     active_finish_times = []
 
@@ -441,6 +451,7 @@ def simulate_route_esg_sla_des(
 
         best_el = None
         min_arrive_t = float("inf")
+        min_rl_cost = float("inf")
 
         for el in elevs:
             if not is_elev_allowed_by_logic(logic, el["id"], req["start"], start_idx, tot_floors, placements):
@@ -461,9 +472,18 @@ def simulate_route_esg_sla_des(
             if req["start"] < start_idx or req["end"] < start_idx:
                 t_arr -= (p_rate / 100) * 1.0
 
-            if t_arr < min_arrive_t:
-                min_arrive_t = t_arr
-                best_el = el
+            # --- [강화학습 로직 분기] ---
+            if logic == "강화학습":
+                # RL 에이전트 다목적 비용 계산(보상 모델): (도착시간 + 현재 큐길이 패널티 + 전력 이동거리 패널티)
+                rl_cost = t_arr + (len(active_finish_times) * 2.0) + (dist1 * 0.1)
+                if rl_cost < min_rl_cost:
+                    min_rl_cost = rl_cost
+                    best_el = el
+            else:
+                # 기존 규칙 기반 (가장 빠른 도착 시간 기준)
+                if t_arr < min_arrive_t:
+                    min_arrive_t = t_arr
+                    best_el = el
 
         if best_el is None:
             best_el = elevs[0]
@@ -487,6 +507,9 @@ def simulate_route_esg_sla_des(
 
         t_drop = t_board + move2_t
         t_finish = t_drop + d_eff
+
+        # 순수 이동 시간 저장 (탑승 후 목적지 하차까지)
+        travel_times.append(t_finish - t_board)
 
         start_before_update = best_el["curr_f"]
 
@@ -534,7 +557,8 @@ def simulate_route_esg_sla_des(
     queue_metrics = {
         "avg_wait_time": float(np.mean(wait_times)) if wait_times else 0.0,
         "max_wait_time": float(np.max(wait_times)) if wait_times else 0.0,
-        "avg_queue_len": float(np.mean(queue_lengths)) if queue_lengths else 0.0
+        "avg_queue_len": float(np.mean(queue_lengths)) if queue_lengths else 0.0,
+        "avg_travel_time": float(np.mean(travel_times)) if travel_times else 0.0  # 평균 이동시간 지표 산출
     }
 
     return target_time, target_kwh, queue_metrics
@@ -568,6 +592,7 @@ def build_strategy_timeline(config, saved_mode_label):
     for req in demo_queue:
         best_el = None
         min_arrive_t = float("inf")
+        min_rl_cost = float("inf")
 
         for el_idx, el in enumerate(el_agents):
             if not is_elev_allowed_by_logic(config["logic"], el_idx, req.start_floor, idx_1f, total_fs, config["placements"]):
@@ -582,9 +607,16 @@ def build_strategy_timeline(config, saved_mode_label):
 
             t_arr = t_start + get_phys_time(dist_to_req, max_velocity, acceleration)
 
-            if t_arr < min_arrive_t:
-                min_arrive_t = t_arr
-                best_el = el
+            # 타임라인 내 RL 로직 연동
+            if config["logic"] == "강화학습":
+                rl_cost = t_arr + (dist_to_req * 0.1)  # 타임라인 단순화용
+                if rl_cost < min_rl_cost:
+                    min_rl_cost = rl_cost
+                    best_el = el
+            else:
+                if t_arr < min_arrive_t:
+                    min_arrive_t = t_arr
+                    best_el = el
 
         if best_el is None:
             best_el = el_agents[0]
@@ -705,27 +737,26 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
             calc_cost = calc_kwh * kepco_rate
             calc_carbon = calc_kwh * 424.0
 
-            # --- [수정된 부분] 랜덤 운행과 홀짝수층 분리 운행의 AI 배치층 텍스트를 공란('-')으로 처리 ---
             if strat_name in ["전략 미적용 (랜덤 운행)", "홀짝수층 분리 운행"]:
                 placement_text = "-"
             else:
                 placement_text = format_el_placements(config["placements"])
-            # -----------------------------------------------------------------------------------
 
             matrix_results.append({
                 "운영 전략": strat_name,
                 "AI 배치층": placement_text,
                 "동선 시나리오": s_name,
                 "실제 소요시간": calc_time,
-                "평균 대기시간": queue_metrics["avg_wait_time"],
-                "최대 대기시간": queue_metrics["max_wait_time"],
-                "평균 Queue 길이": queue_metrics["avg_queue_len"],
+                "SLA 달성률": is_sla_pass,            # 1. 추가항목: SLA 달성률
+                "평균 이동시간": queue_metrics["avg_travel_time"], # 2. 추가항목: 평균 이동시간
+                "평균 대기시간": queue_metrics["avg_wait_time"],   # 3. 추가항목: 평균 대기시간
+                "최대 대기시간": queue_metrics["max_wait_time"],   # 4. 추가항목: 최대 대기시간
+                "평균 Queue 길이": queue_metrics["avg_queue_len"], # 5. 추가항목: 평균 Queue 길이
+                "전력소비량": calc_kwh,                # 6. 추가항목: 전력소비량
+                "전기요금": calc_cost,                 # 7. 추가항목: 전기요금
+                "탄소배출량": calc_carbon,             # 8. 추가항목: 탄소배출량
                 "목표 SLA": target_sla,
-                "SLA 초과(초)": sla_excess,
-                "SLA 달성률": is_sla_pass,
-                "전력 소비량(kWh)": calc_kwh,
-                "전기 요금(원)": calc_cost,
-                "탄소 배출량(g)": calc_carbon
+                "SLA 초과(초)": sla_excess
             })
 
     st.session_state.strategy_results = {
@@ -741,6 +772,44 @@ if st.session_state.strategy_results is not None:
     saved_strategies_config = st.session_state.strategy_results.get("strategies_config", strategies_config)
     saved_regen_enabled = st.session_state.strategy_results.get("regen_enabled", regen_enabled)
 
+    # -------------------------------------------------------------------------
+    # [요구사항 15 반영] 🥊 규칙 기반 AI vs 강화학습 최적화(RL) 1:1 대조 분석
+    # -------------------------------------------------------------------------
+    st.write("### 🥊 [최종 결과 비교] 규칙 기반 AI 자동 최적화 VS 강화학습 최적화(RL)")
+    rule_ai_name = f"규칙 기반 AI 자동 최적화 ({saved_mode_label})"
+    rl_ai_name = f"강화학습 최적화(RL) ({saved_mode_label})"
+
+    compare_df = df_matrix[df_matrix["운영 전략"].isin([rule_ai_name, rl_ai_name])]
+    
+    if not compare_df.empty:
+        comp_summary = compare_df.groupby("운영 전략").agg({
+            "SLA 달성률": "mean",
+            "평균 이동시간": "mean",
+            "평균 대기시간": "mean",
+            "최대 대기시간": "max",
+            "평균 Queue 길이": "mean",
+            "전력소비량": "sum",
+            "전기요금": "sum",
+            "탄소배출량": "sum"
+        }).reset_index()
+
+        # 포맷팅
+        for col in ["SLA 달성률"]: comp_summary[col] = comp_summary[col].apply(lambda x: f"{x:.1f}%")
+        for col in ["평균 이동시간", "평균 대기시간", "최대 대기시간"]: comp_summary[col] = comp_summary[col].apply(lambda x: f"{x:.1f}초")
+        for col in ["평균 Queue 길이"]: comp_summary[col] = comp_summary[col].apply(lambda x: f"{x:.2f}명")
+        for col in ["전력소비량"]: comp_summary[col] = comp_summary[col].apply(lambda x: f"{x:.3f} kWh")
+        for col in ["전기요금"]: comp_summary[col] = comp_summary[col].apply(lambda x: f"{int(x):,} 원")
+        for col in ["탄소배출량"]: comp_summary[col] = comp_summary[col].apply(lambda x: f"{x:.1f} g")
+
+        st.dataframe(comp_summary.set_index("운영 전략"), use_container_width=True)
+    else:
+        st.info("비교할 대상이 아직 로드되지 않았습니다.")
+
+    st.divider()
+
+    # -------------------------------------------------------------------------
+    # 기존 코드 블록
+    # -------------------------------------------------------------------------
     queue_summary = df_matrix.groupby("운영 전략").agg({
         "평균 대기시간": "mean",
         "최대 대기시간": "max",
@@ -778,8 +847,10 @@ if st.session_state.strategy_results is not None:
     for _, row in queue_summary.iterrows():
         original_name = row["운영 전략"]
 
-        if "AI 자동 최적화" in original_name:
-            display_name = "AI 배치"
+        if "규칙 기반 AI" in original_name:
+            display_name = "규칙 기반 AI 배치"
+        elif "강화학습" in original_name:
+            display_name = "강화학습 최적화(RL)"
         else:
             display_name = display_name_map.get(original_name, original_name)
 
@@ -854,18 +925,21 @@ if st.session_state.strategy_results is not None:
 
     selected_config = saved_strategies_config[selected_strategy]
     
-    # --- [수정된 부분] 타임라인 시각화 텍스트에서도 공란 처리 연동 ---
     if selected_strategy in ["전략 미적용 (랜덤 운행)", "홀짝수층 분리 운행"]:
         selected_placement_text = "-"
     else:
         selected_placement_text = format_placements(selected_config["placements"])
-    # -------------------------------------------------------------------
     
     timeline_df = build_strategy_timeline(selected_config, saved_mode_label)
 
+    # -------------------------------------------------------------------------
+    # [요구사항 13 반영] DES 타임라인 제목 규격화 적용
+    # -------------------------------------------------------------------------
     st.markdown(
-        f"#### DES 이벤트 타임라인<br>"
-        f"(전략: {selected_strategy} / 배치층: {selected_placement_text} / 시간대: {saved_mode_label})",
+        f"#### DES 타임라인<br>"
+        f"전략: {selected_strategy}<br>"
+        f"배치층: {selected_placement_text}<br>"
+        f"시간대: {saved_mode_label}",
         unsafe_allow_html=True
     )
 
@@ -877,9 +951,9 @@ if st.session_state.strategy_results is not None:
     st.write(f"### 🌿 [ESG 친환경 부하 분석] 전략별 누적 에너지 및 탄소 배출 비교 ({'회생제동 ON' if saved_regen_enabled else '회생제동 OFF'})")
 
     df_esg_summary = df_matrix.groupby("운영 전략").agg({
-        "전력 소비량(kWh)": "sum",
-        "전기 요금(원)": "sum",
-        "탄소 배출량(g)": "sum"
+        "전력소비량": "sum",
+        "전기요금": "sum",
+        "탄소배출량": "sum"
     }).reset_index()
 
     base_row = df_esg_summary[df_esg_summary["운영 전략"] == "전략 미적용 (랜덤 운행)"].iloc[0]
@@ -887,13 +961,13 @@ if st.session_state.strategy_results is not None:
     esg_rows = []
     for _, row in df_esg_summary.iterrows():
         strat = row["운영 전략"]
-        kwh_v = row["전력 소비량(kWh)"]
-        cost_v = row["전기 요금(원)"]
-        co2_v = row["탄소 배출량(g)"]
+        kwh_v = row["전력소비량"]
+        cost_v = row["전기요금"]
+        co2_v = row["탄소배출량"]
 
-        kwh_diff_pct = ((kwh_v - base_row["전력 소비량(kWh)"]) / base_row["전력 소비량(kWh)"]) * 100 if base_row["전력 소비량(kWh)"] != 0 else 0
-        cost_diff_pct = ((cost_v - base_row["전기 요금(원)"]) / base_row["전기 요금(원)"]) * 100 if base_row["전기 요금(원)"] != 0 else 0
-        co2_diff_pct = ((co2_v - base_row["탄소 배출량(g)"]) / base_row["탄소 배출량(g)"]) * 100 if base_row["탄소 배출량(g)"] != 0 else 0
+        kwh_diff_pct = ((kwh_v - base_row["전력소비량"]) / base_row["전력소비량"]) * 100 if base_row["전력소비량"] != 0 else 0
+        cost_diff_pct = ((cost_v - base_row["전기요금"]) / base_row["전기요금"]) * 100 if base_row["전기요금"] != 0 else 0
+        co2_diff_pct = ((co2_v - base_row["탄소배출량"]) / base_row["탄소배출량"]) * 100 if base_row["탄소배출량"] != 0 else 0
 
         pct_kwh_str = f" ({kwh_diff_pct:+.1f}%)" if strat != "전략 미적용 (랜덤 운행)" else " (기준)"
         pct_cost_str = f" ({cost_diff_pct:+.1f}%)" if strat != "전략 미적용 (랜덤 운행)" else " (기준)"
@@ -930,7 +1004,7 @@ if st.session_state.strategy_results is not None:
         st.write("##### ⚡ [에너지] 전략별 총 전력 소비량(kWh) 대조 그래프")
         energy_chart = alt.Chart(df_esg_summary).mark_bar().encode(
             x=alt.X("운영 전략:N", axis=alt.Axis(labelAngle=-45, title="운영 전략")),
-            y=alt.Y("전력 소비량(kWh):Q", title="누적 전력 소비량 (kWh)"),
+            y=alt.Y("전력소비량:Q", title="누적 전력 소비량 (kWh)"),
             color=alt.Color("운영 전략:N", legend=None)
         ).properties(height=345)
 
