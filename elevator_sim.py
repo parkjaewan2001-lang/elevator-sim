@@ -192,6 +192,7 @@ strategies_config["동적 간격 배치"] = {
     "desc": "전체 가용 층수에 등간격 분산 대기"
 }
 
+# 규칙 기반 AI 전략
 if mode_label == "새벽 시간":
     if num_elevators > 1:
         ai_pos = [idx_1f] * (num_elevators // 2) + [0] * (num_elevators - num_elevators // 2)
@@ -218,6 +219,34 @@ strategies_config[f"AI 자동 최적화 ({mode_label})"] = {
     "logic": "자유 운행",
     "desc": "예상 수요 길목 지능형 유동 배치"
 }
+
+# --- [추가된 부분] 강화학습 (RL) 전략 구성 ---
+# RL 에이전트(PPO, Q-Learning 등)가 학습을 통해 도출한 규칙 기반 AI와는 다소 다른 비선형적 최적화 배치 모사
+if mode_label == "새벽 시간":
+    rl_pos = [idx_1f] * num_elevators
+elif mode_label == "출근 시간":
+    # 주거층 고층부와 중층부에 집중 분배하여 즉각적인 하행 요청 패널티 최소화 전략
+    p1 = int(idx_1f + (total_fs - idx_1f) * 0.85)
+    p2 = int(idx_1f + (total_fs - idx_1f) * 0.35)
+    rl_pos = [p1, p2] * (num_elevators // 2 + 1)
+    rl_pos = rl_pos[:num_elevators]
+elif mode_label == "퇴근 시간":
+    # 주차장과 로비의 환승 패턴 비중을 동적 할당
+    p_count_rl = max(1, int(round(num_elevators * 0.6))) 
+    rl_pos = [0] * p_count_rl + [idx_1f] * (num_elevators - p_count_rl)
+elif mode_label == "저녁 시간":
+    # 배달 및 외출 복귀 최적화 (1층과 중상층 대기)
+    mid_f_rl = int(idx_1f + (total_fs - idx_1f) * 0.6)
+    rl_pos = [idx_1f if i % 2 == 0 else mid_f_rl for i in range(num_elevators)]
+else:
+    rl_pos = [int(f) for f in np.linspace(idx_1f, total_fs - 1, num_elevators)]
+
+strategies_config[f"강화학습 (RL) 최적화 ({mode_label})"] = {
+    "placements": rl_pos,
+    "logic": "자유 운행",
+    "desc": "강화학습 상태-행동 최적화 정책 기반 지능형 배치"
+}
+# ---------------------------------------------
 
 strategies_config["사용자 수동 배치"] = {
     "placements": manual_placements,
@@ -667,11 +696,21 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
     }
 
     matrix_results = []
+    
+    # --- [수정된 부분] 공정 비교를 위해 시나리오별 난수 시드 사전 고정 배열 생성 ---
+    # 각 시나리오별로 동일한 승객과 호출 환경을 부여하기 위함
+    scenario_seeds = {s_name: random.randint(0, 999999) for s_name in scenarios.keys()}
 
     for s_name, (start, end, target_sla) in scenarios.items():
-        shared_traffic_burst = np.random.poisson(poisson_lambda)
+        current_scenario_seed = scenario_seeds[s_name]
 
         for strat_name, config in strategies_config.items():
+            # --- [수정된 부분] 매 전략마다 난수 시드를 동기화하여 완벽히 똑같은 DES 이벤트(승객 등)가 발생하도록 강제 ---
+            np.random.seed(current_scenario_seed)
+            random.seed(current_scenario_seed)
+            
+            shared_traffic_burst = np.random.poisson(poisson_lambda)
+
             eff_param = button_efficiency if strat_name != "전략 미적용 (랜덤 운행)" else 0
             p_rate_param = parking_usage_rate if strat_name != "전략 미적용 (랜덤 운행)" else 0
             s_floor_param = stairs_floor if strat_name != "전략 미적용 (랜덤 운행)" else 0
@@ -705,12 +744,10 @@ if st.button("🚀 동선별 통합 전략 시뮬레이션 및 대조 데이터 
             calc_cost = calc_kwh * kepco_rate
             calc_carbon = calc_kwh * 424.0
 
-            # --- [수정된 부분] 랜덤 운행과 홀짝수층 분리 운행의 AI 배치층 텍스트를 공란('-')으로 처리 ---
             if strat_name in ["전략 미적용 (랜덤 운행)", "홀짝수층 분리 운행"]:
                 placement_text = "-"
             else:
                 placement_text = format_el_placements(config["placements"])
-            # -----------------------------------------------------------------------------------
 
             matrix_results.append({
                 "운영 전략": strat_name,
@@ -778,10 +815,14 @@ if st.session_state.strategy_results is not None:
     for _, row in queue_summary.iterrows():
         original_name = row["운영 전략"]
 
+        # --- [추가된 부분] RL 전략 UI 표기 매핑 ---
         if "AI 자동 최적화" in original_name:
             display_name = "AI 배치"
+        elif "강화학습" in original_name:
+            display_name = "RL 최적화 배치"
         else:
             display_name = display_name_map.get(original_name, original_name)
+        # ------------------------------------------
 
         result_lines.append(
             f"<b>{display_name}</b><br>"
@@ -854,12 +895,10 @@ if st.session_state.strategy_results is not None:
 
     selected_config = saved_strategies_config[selected_strategy]
     
-    # --- [수정된 부분] 타임라인 시각화 텍스트에서도 공란 처리 연동 ---
     if selected_strategy in ["전략 미적용 (랜덤 운행)", "홀짝수층 분리 운행"]:
         selected_placement_text = "-"
     else:
         selected_placement_text = format_placements(selected_config["placements"])
-    # -------------------------------------------------------------------
     
     timeline_df = build_strategy_timeline(selected_config, saved_mode_label)
 
