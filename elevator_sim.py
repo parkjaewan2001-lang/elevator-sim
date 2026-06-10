@@ -328,18 +328,25 @@ def generate_shared_traffic_sample(mc_seed, target_start, target_end, p_lambda, 
 # ----------------- 운영 전략 대기 포지션 맵 빌드 -----------------
 strategies_config = {}
 mid_idx = (total_fs + idx_1f) // 2
+demand_counts, df_heatmap = generate_demand_profile(mode_label)
+top_demand_floors = np.argsort(demand_counts)[-num_elevators:]
+
+# [수정] AI 전략들의 배치 로직을 주차장 이용 비율에 따라 동적으로 생성
+def get_ai_placements(base_idx, target_idx, count):
+    return [int(x) for x in np.linspace(base_idx, target_idx, count)]
+
+p_base = 0 if parking_usage_rate > 50 else idx_1f
+
 strategies_config["전략 미적용 (랜덤 운행)"] = {"placements": [idx_1f] * num_elevators, "logic": "자유 운행", "desc": "무작위 방치 상태"}
 strategies_config["홀짝수층 분리 운행"] = {"placements": [idx_1f] * num_elevators, "logic": "홀짝 운행", "desc": "홀/짝수층 전담 배정"}
 strategies_config["고층부/저층부 분할배치"] = {"placements": [int(idx_1f + (mid_idx - idx_1f) / 2) if i < num_elevators / 2 else int(mid_idx + (total_fs - mid_idx) / 2) for i in range(num_elevators)], "logic": "분할 배치", "desc": "건물 상/하방 구역 분할"}
-strategies_config["베이스 스테이션 집중"] = {"placements": [idx_1f] * num_elevators, "logic": "베이스 스테이션 집중", "desc": "무조건 1층 로비 복귀"}
+strategies_config["베이스 스테이션 집중"] = {"placements": [p_base] * num_elevators, "logic": "베이스 스테이션 집중", "desc": "무조건 로비/지하 복귀"}
 strategies_config["동적 간격 배치"] = {"placements": [int(f) for f in np.linspace(0, total_fs - 1, num_elevators)], "logic": "동적 간격", "desc": "전체 층수 등간격 분산"}
-demand_counts, df_heatmap = generate_demand_profile(mode_label)
-top_demand_floors = np.argsort(demand_counts)[-num_elevators:]
 strategies_config["AI 자동 최적화"] = {"placements": sorted([int(f) for f in top_demand_floors]), "logic": "AI 자동 최적화", "desc": "수요 히트맵 기반 최적 배치"}
-strategies_config["AI Generated Strategy #1 (로비 집중형)"] = {"placements": [idx_1f] * num_elevators, "logic": "자유 운행", "desc": "로비 밀집"}
-strategies_config["AI Generated Strategy #2 (저층 분산형)"] = {"placements": [int(x) for x in np.linspace(idx_1f, mid_idx, num_elevators)], "logic": "자유 운행", "desc": "하방 저층 분산"}
+strategies_config["AI Generated Strategy #1 (로비/지하 집중형)"] = {"placements": [p_base] * num_elevators, "logic": "자유 운행", "desc": "출발층 밀집"}
+strategies_config["AI Generated Strategy #2 (하방 분산형)"] = {"placements": get_ai_placements(p_base, mid_idx, num_elevators), "logic": "자유 운행", "desc": "하방 저층 분산"}
 strategies_config["AI Generated Strategy #3 (중층 집중형)"] = {"placements": [mid_idx] * num_elevators, "logic": "자유 운행", "desc": "중심부 밀집"}
-strategies_config["AI Generated Strategy #4 (고층 집중형)"] = {"placements": [int(x) for x in np.linspace(mid_idx, total_fs - 1, num_elevators)], "logic": "자유 운행", "desc": "상방 고층 집중"}
+strategies_config["AI Generated Strategy #4 (고층 집중형)"] = {"placements": get_ai_placements(mid_idx, total_fs - 1, num_elevators), "logic": "자유 운행", "desc": "상방 고층 집중"}
 strategies_config["AI Generated Strategy #5 (균등 분산형)"] = {"placements": [int(x) for x in np.linspace(0, total_fs - 1, num_elevators)], "logic": "자유 운행", "desc": "균등 수평 분산"}
 strategies_config["사용자 수동 배치"] = {"placements": manual_placements, "logic": "자유 운행", "desc": "연구원 임의 배치"}
 
@@ -378,19 +385,19 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
             m_time, m_kwh, m_wait, m_q, m_sla = df_mc["time"].mean(), df_mc["kwh"].mean(), df_mc["wait"].mean(), df_mc["q"].mean(), df_mc["sla"].mean()
             std_time = df_mc["time"].std()
 
-            # [수정] Fitness 로직 강화: 주차장 이용 비율 반영
+            # [수정] Fitness 로직 고도화: 주요 수요 지점에 최소 한 대 배치 여부 체크
             fitness = 0.0
-            avg_p = np.mean(config["placements"])
+            ps = config["placements"]
             if mode_label == "출근 시간":
-                # 출근 시 고층 대기가 유리하나, 주차장 이용률이 높으면 저층 복귀도 어느정도 필요
-                fitness = 100.0 if avg_p > mid_idx else 30.0
+                fitness = 100.0 if any(p > mid_idx for p in ps) else 30.0
             elif mode_label == "퇴근 시간":
-                # 퇴근 시 주차장 이용률이 높으면 지하(0)층 근처 배치가 압도적으로 유리해야 함
-                target_base = 0 if parking_usage_rate > 50 else idx_1f
-                fitness = 100.0 if avg_p <= target_base + 2 else 30.0
-            elif mode_label == "낮 시간": fitness = 100.0 if abs(avg_p - mid_idx) < 5 else 50.0
-            elif mode_label == "저녁 시간": fitness = 100.0 if (idx_1f <= avg_p <= mid_idx) else 40.0
-            elif mode_label == "새벽 시간": fitness = 100.0 if avg_p < idx_1f + 2 else 40.0
+                target_f = 0 if parking_usage_rate > 50 else idx_1f
+                # 주요 수요 지점(지하/로비) 근처에 한 대라도 있으면 가점
+                fitness = 100.0 if any(abs(p - target_f) <= 1 for p in ps) else 20.0
+                if strat_name == "홀짝수층 분리 운행": fitness -= 10.0 # 주차장 대응 불가 패널티
+            elif mode_label == "낮 시간": fitness = 100.0 if any(abs(p - mid_idx) < 5 for p in ps) else 50.0
+            elif mode_label == "저녁 시간": fitness = 100.0 if any(idx_1f <= p <= mid_idx for p in ps) else 40.0
+            elif mode_label == "새벽 시간": fitness = 100.0 if any(p < idx_1f + 2 for p in ps) else 40.0
 
             placement_display = "" if strat_name in ["전략 미적용 (랜덤 운행)", "홀짝수층 분리 운행"] else format_el_placements(config["placements"])
             mean_matrix_results.append({"운영 전략": strat_name, "AI 배치층": placement_display, "동선 시나리오": s_name, "실제 소요시간": m_time, "평균 대기시간": m_wait, "평균 Queue 길이": m_q, "SLA 달성률": m_sla, "전력 소비량(kWh)": m_kwh, "전기 요금(원)": m_kwh * kepco_rate, "탄소 배출량(g)": m_kwh * 424.0, "Fitness": fitness, "Std": std_time})
@@ -434,12 +441,12 @@ if st.session_state.strategy_results:
         }), use_container_width=True)
     with col2:
         st.success(f"**최적 전략: {best['운영 전략']}**\n* KPI: {best['Final Score']:.2f}\n* SLA: {best['SLA 달성률']:.1f}%\n* 대기시간: {best['평균 대기시간']:.1f}초\n* Fitness: {best['Fitness']:.1f}")
-        # [수정] 경고 로직에 주차장 이용 비율 반영
-        avg_placement = np.mean(strategies_config[best['운영 전략']]['placements'])
-        if saved_mode == "출근 시간" and avg_placement < mid_idx: st.warning("⚠️ 출근 시간 경고: 로비 대기 비중이 높습니다.")
+        
+        ps_best = strategies_config[best['운영 전략']]['placements']
+        if saved_mode == "출근 시간" and not any(p > mid_idx for p in ps_best): st.warning("⚠️ 출근 시간 경고: 고층 대기 엘리베이터가 없습니다.")
         if saved_mode == "퇴근 시간":
-            target_limit = 0 if parking_usage_rate > 50 else idx_1f
-            if avg_placement > target_limit + 5: st.warning("⚠️ 퇴근 시간 경고: 고층 대기 비중이 높습니다. (주차장 수요 미대응)")
+            target_f = 0 if parking_usage_rate > 50 else idx_1f
+            if not any(abs(p - target_f) <= 1 for p in ps_best): st.warning("⚠️ 퇴근 시간 경고: 주요 출발층(지하/로비) 대응 엘리베이터가 없습니다.")
 
     st.write("### 📈 전략 비교 매트릭스")
     st.dataframe(df.pivot(index="운영 전략", columns="동선 시나리오", values="실제 소요시간"), use_container_width=True)
