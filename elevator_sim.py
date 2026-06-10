@@ -388,23 +388,25 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
             elif mode_label == "새벽 시간": fitness = 100.0 if avg_p < idx_1f + 2 else 40.0
 
             placement_display = "" if strat_name in ["전략 미적용 (랜덤 운행)", "홀짝수층 분리 운행"] else format_el_placements(config["placements"])
-            mean_matrix_results.append({"운영 전략": strat_name, "AI 배치층": placement_display, "동선 시나리오": s_name, "실제 소요시간": m_time, "평균 대기시간": m_wait, "평균 Queue 길이": m_q, "SLA 달성률": m_sla, "전력 소비량(kWh)": m_kwh, "탄소 배출량(g)": m_kwh * 424.0, "Fitness": fitness, "Std": std_time})
+            mean_matrix_results.append({"운영 전략": strat_name, "AI 배치층": placement_display, "동선 시나리오": s_name, "실제 소요시간": m_time, "평균 대기시간": m_wait, "평균 Queue 길이": m_q, "SLA 달성률": m_sla, "전력 소비량(kWh)": m_kwh, "전기 요금(원)": m_kwh * kepco_rate, "탄소 배출량(g)": m_kwh * 424.0, "Fitness": fitness, "Std": std_time})
 
         current_step += int(mc_iterations)
         progress_bar.progress(min(current_step / total_steps, 1.0))
         status_text.text(f"🔄 몬테카를로 연산 중... ({s_name})")
     
-    st.session_state.strategy_results = {"df": pd.DataFrame(mean_matrix_results), "mode": mode_label}
+    st.session_state.strategy_results = {"df": pd.DataFrame(mean_matrix_results), "mode": mode_label, "kepco_rate": kepco_rate}
 
 if st.session_state.strategy_results:
     df, saved_mode = st.session_state.strategy_results["df"], st.session_state.strategy_results["mode"]
-    # [수정] AI 배치층 정보를 보존하기 위해 agg 생성 시 first() 사용
+    saved_kepco_rate = st.session_state.strategy_results["kepco_rate"]
+    
     agg = df.groupby("운영 전략").agg({
         "AI 배치층": "first",
         "SLA 달성률": "mean", 
         "평균 대기시간": "mean", 
         "평균 Queue 길이": "mean", 
         "전력 소비량(kWh)": "sum", 
+        "전기 요금(원)": "sum",
         "탄소 배출량(g)": "sum", 
         "Fitness": "mean", 
         "Std": "mean"
@@ -419,7 +421,12 @@ if st.session_state.strategy_results:
     best = agg.sort_values("Final Score", ascending=False).iloc[0]
     st.write("### 🏆 종합 KPI 스코어 및 시간대 추천 엔진")
     col1, col2 = st.columns([1.5, 1])
-    with col1: st.dataframe(agg[["운영 전략", "AI 배치층", "Final Score", "SLA 달성률", "평균 대기시간", "평균 Queue 길이", "Fitness", "Std"]].sort_values("Final Score", ascending=False), use_container_width=True)
+    with col1: 
+        display_agg = agg[["운영 전략", "AI 배치층", "Final Score", "SLA 달성률", "평균 대기시간", "평균 Queue 길이", "전기 요금(원)", "탄소 배출량(g)", "Fitness", "Std"]].sort_values("Final Score", ascending=False)
+        st.dataframe(display_agg.style.format({
+            "Final Score": "{:.2f}", "SLA 달성률": "{:.1f}%", "평균 대기시간": "{:.1f}초", "평균 Queue 길이": "{:.2f}",
+            "전기 요금(원)": "{:,.0f}원", "탄소 배출량(g)": "{:,.1f}g", "Fitness": "{:.1f}", "Std": "{:.2f}"
+        }), use_container_width=True)
     with col2:
         st.success(f"**최적 전략: {best['운영 전략']}**\n* KPI: {best['Final Score']:.2f}\n* SLA: {best['SLA 달성률']:.1f}%\n* 대기시간: {best['평균 대기시간']:.1f}초\n* Fitness: {best['Fitness']:.1f}")
         if saved_mode == "출근 시간" and np.mean(strategies_config[best['운영 전략']]['placements']) < mid_idx: st.warning("⚠️ 출근 시간 경고: 로비 대기 비중이 높습니다.")
@@ -431,9 +438,22 @@ if st.session_state.strategy_results:
     st.write("### 📊 DES 이벤트 타임라인 (최적 전략 기준)")
     st.dataframe(build_strategy_timeline(strategies_config[best['운영 전략']], saved_mode), use_container_width=True)
 
-    st.write("### 🌿 ESG 및 시각화")
+    st.write("### 🌿 ESG 상세 비교 (에너지 비용 및 탄소 발자국)")
     c1, c2 = st.columns(2)
-    with c1: st.altair_chart(alt.Chart(agg).mark_bar().encode(x='운영 전략', y='전력 소비량(kWh)', color='운영 전략'), use_container_width=True)
-    with c2: st.altair_chart(alt.Chart(agg).mark_bar().encode(x='운영 전략', y='평균 대기시간', color='운영 전략'), use_container_width=True)
+    with c1: 
+        st.write("##### ⚡ 운영 전략별 누적 전기 요금 (원)")
+        st.altair_chart(alt.Chart(agg).mark_bar().encode(x='운영 전략', y='전기 요금(원)', color='운영 전략'), use_container_width=True)
+    with c2: 
+        st.write("##### 🌍 운영 전략별 누적 탄소 배출량 (gCO2)")
+        st.altair_chart(alt.Chart(agg).mark_bar().encode(x='운영 전략', y='탄소 배출량(g)', color='운영 전략'), use_container_width=True)
+    
+    st.write("### 📊 운영 효율성 시각화")
+    c3, c4 = st.columns(2)
+    with c3:
+        st.write("##### ⏱️ 운영 전략별 평균 대기시간 (초)")
+        st.altair_chart(alt.Chart(agg).mark_bar().encode(x='운영 전략', y='평균 대기시간', color='운영 전략'), use_container_width=True)
+    with c4:
+        st.write("##### 📐 운영 전략별 평균 Queue 길이")
+        st.altair_chart(alt.Chart(agg).mark_bar().encode(x='운영 전략', y='평균 Queue 길이', color='운영 전략'), use_container_width=True)
 else:
     st.info("버튼을 눌러 시뮬레이션을 시작하세요.")
