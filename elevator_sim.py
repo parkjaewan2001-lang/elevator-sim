@@ -441,20 +441,20 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
     
     # --- Heuristic Auto-Search 결정론적 생성 (Seeded Generator) ---
     status_text.text(f"🔍 {auto_gen_count}개의 무작위 배치 조합 탐색 중...")
-    rng = np.random.default_rng(GLOBAL_SEED)
+    rng = np.random.default_rng(GLOBAL_SEED) # FIXED FOR STABLE KPI
     generated_set = set()
     attempts = 0
     while len(generated_set) < auto_gen_count and attempts < auto_gen_count * 10:
         p_tuple = tuple(sorted(rng.integers(0, total_fs, size=num_elevators).tolist()))
         generated_set.add(p_tuple)
         attempts += 1
-    random_placements = list(generated_set)
+    random_placements = sorted(list(generated_set)) # FIXED FOR STABLE KPI
     
     scores = []
     for p in random_placements:
         score = sum((demand_counts[f] / 5000) * min([abs(f - ep) for ep in p]) for f in range(total_fs))
         scores.append((score, p))
-    scores.sort(key=lambda x: x[0])
+    scores.sort(key=lambda x: (x[0], x[1])) # FIXED FOR STABLE KPI
     
     for idx, (sc, p) in enumerate(scores[:5]):
         strategies_config[f"AI Generated Strategy #{idx+1}"] = {
@@ -471,7 +471,7 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
     }
 
     # 격리된 예측 가능 시드 배열 생성
-    mc_seeds = [GLOBAL_SEED + it for it in range(int(mc_iterations))]
+    mc_seeds = [GLOBAL_SEED + it for it in range(int(mc_iterations))] # FIXED FOR STABLE KPI
     
     raw_stats = []
     mean_matrix_results = []
@@ -488,8 +488,8 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
             mc_times, mc_kwhs, mc_waits, mc_q_lens, mc_slas = [], [], [], [], []
             
             for it in range(int(mc_iterations)):
-                np.random.seed(mc_seeds[it])
-                random.seed(mc_seeds[it])
+                np.random.seed(mc_seeds[it]) # FIXED FOR STABLE KPI
+                random.seed(mc_seeds[it]) # FIXED FOR STABLE KPI
                 shared_traffic_burst = np.random.poisson(poisson_lambda)
                 
                 calc_time, calc_kwh, queue_metrics = simulate_route_esg_sla_des(
@@ -509,11 +509,11 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
                     progress_bar.progress(current_step / total_steps)
                     status_text.text(f"🔄 몬테카를로 시뮬레이션 연산 중... ({current_step}/{total_steps})")
 
-            mean_time = np.mean(mc_times)
-            mean_wait = np.mean(mc_waits)
-            mean_q_len = np.mean(mc_q_lens)
-            mean_kwh = np.mean(mc_kwhs)
-            mean_sla = np.mean(mc_slas)
+            mean_time = np.mean(mc_times) # FIXED FOR STABLE KPI
+            mean_wait = np.mean(mc_waits) # FIXED FOR STABLE KPI
+            mean_q_len = np.mean(mc_q_lens) # FIXED FOR STABLE KPI
+            mean_kwh = np.mean(mc_kwhs) # FIXED FOR STABLE KPI
+            mean_sla = np.mean(mc_slas) # FIXED FOR STABLE KPI
             
             calc_cost = mean_kwh * kepco_rate
             calc_carbon = mean_kwh * 424.0
@@ -588,7 +588,7 @@ if st.session_state.strategy_results is not None:
             "SLA 평균": sla, "대기시간 개선율(%)": wait_imp, "Queue 개선율(%)": q_imp, "ESG 개선율(%)": esg_imp
         })
         
-    df_kpi = pd.DataFrame(kpi_results).sort_values("Final Score", ascending=False).reset_index(drop=True)
+    df_kpi = pd.DataFrame(kpi_results).sort_values(by=["Final Score", "운영 전략"], ascending=[False, True]).reset_index(drop=True) # FIXED FOR STABLE KPI
     best_strat_name = df_kpi.iloc[0]["운영 전략"]
     best_strat_metrics = df_kpi.iloc[0]
 
