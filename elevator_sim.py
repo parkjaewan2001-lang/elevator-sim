@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import random
 from copy import deepcopy
 
@@ -23,10 +23,10 @@ st.subheader("⚡ 동선별 타임라인·SLA 달성률 및 회생제동 기반 
 
 st.markdown("""
 > 💡 **Simulation Methodology (연구 방법론):**
-> * **현실적 그룹 탑승 (Group Boarding):** 이제 승객은 혼자가 아닌 **1~8명의 그룹** 단위로 생성되며, 인원수에 따라 엘리베이터의 하중과 에너지 소비량이 정밀하게 계산됩니다.
+> * **현실적 다중 하차 (Multi-Drop Routing):** 이제 그룹 승객은 한 층이 아닌 **여러 층(예: 27F → 15F → 1F)**에 걸쳐 순차적으로 하차하며, 각 정차 시의 문 열림과 하중 변화가 실시간 반영됩니다.
+> * **현실적 그룹 탑승 (Group Boarding):** 승객은 1~8명의 그룹 단위로 생성되며, 인원수에 따라 엘리베이터의 하중과 에너지 소비량이 정밀하게 계산됩니다.
 > * **완벽한 재현성 (Reproducibility):** 동일 입력 시 항상 동일한 AI 배치와 추천 결과가 나오도록 캐싱과 시드 초기화를 강제했습니다.
 > * **서비스 품질 우선(Quality-First):** 대기시간 최악 전략은 추천에서 배제하며, SLA와 대기시간에 70% 가중치를 부여합니다.
-> * **몬테카를로 시뮬레이션 & 통계 분석:** 각 시나리오별 동일 트래픽 샘플 공유 및 고정 시드 스트림 기반 연산을 수행합니다.
 """)
 
 # ----------------- [2] SIDEBAR: 설정 변수 -----------------
@@ -148,6 +148,25 @@ def generate_weighted_trip_by_time(mode_label, start_idx, tot_floors, parking_ra
     if start == end: end = pick_residential_floor() if start == lobby_floor else lobby_floor
     return start, end
 
+def generate_multi_drop_floors(start_floor, end_floor, passengers, tot_floors, start_idx):
+    # [신규] 다중 하차 층 생성 로직
+    if passengers <= 1: return [end_floor]
+    
+    drops = set([end_floor])
+    num_stops = min(passengers, random.randint(2, 4)) # 최대 4개 층 정차
+    
+    is_up = end_floor > start_floor
+    if is_up:
+        possible = [f for f in range(start_floor + 1, tot_floors) if f != end_floor]
+    else:
+        possible = [f for f in range(0, start_floor) if f != end_floor]
+        
+    if possible:
+        additional = random.sample(possible, min(len(possible), num_stops - 1))
+        drops.update(additional)
+        
+    return sorted(list(drops), reverse=not is_up)
+
 @st.cache_data
 def get_stable_demand_profile(m_label, start_idx, tot_fs, p_rate, s_floor):
     random.seed(GLOBAL_SEED)
@@ -172,8 +191,8 @@ def is_elev_allowed_by_logic(logic, elev_idx, req_start, start_idx, tot_floors, 
 
 @dataclass
 class EventRequest:
-    req_id: int; t_spawn: float; start_floor: int; end_floor: int; passengers: int = 1
-    t_assign: float = 0.0; t_arrive: float = 0.0; t_board: float = 0.0; t_drop: float = 0.0; assigned_el: str = ""
+    req_id: int; t_spawn: float; start_floor: int; end_floors: list; passengers: int = 1
+    t_assign: float = 0.0; t_arrive: float = 0.0; t_board: float = 0.0; t_drops: list = field(default_factory=list); assigned_el: str = ""
 
 @dataclass
 class ElevatorAgent:
@@ -196,10 +215,10 @@ def simulate_route_esg_sla_des(
         requests = []
         for i in range(num_bg):
             s_f, e_f = generate_weighted_trip_by_time(mode_label, start_idx, tot_floors, p_rate, s_floor)
-            # [수정] 1~8명의 그룹 승객 생성
-            passengers = random.randint(1, 8)
-            requests.append({"id": f"BG-{i}", "t_sp": random.uniform(0, 300), "start": s_f, "end": e_f, "is_target": False, "passengers": passengers})
-        requests.append({"id": "TARGET", "t_sp": 150.0, "start": target_start, "end": target_end, "is_target": True, "passengers": 1})
+            ps = random.randint(1, 8)
+            e_fs = generate_multi_drop_floors(s_f, e_f, ps, tot_floors, start_idx)
+            requests.append({"id": f"BG-{i}", "t_sp": random.uniform(0, 300), "start": s_f, "ends": e_fs, "is_target": False, "passengers": ps})
+        requests.append({"id": "TARGET", "t_sp": 150.0, "start": target_start, "ends": [target_end], "is_target": True, "passengers": 1})
         requests.sort(key=lambda x: x["t_sp"])
 
     elevs = [{"id": i, "t_free": 0.0, "curr_f": float(placements[i])} for i in range(len(placements))]
@@ -225,7 +244,7 @@ def simulate_route_esg_sla_des(
             dist1 = abs(curr_pos - req["start"]) * floor_height
             t_arr = t_start + get_phys_time(dist1, max_velocity, acceleration)
             if req["start"] > start_idx: t_arr += (req["start"] - start_idx) * h_penalty * 0.2
-            if req["start"] < start_idx or req["end"] < start_idx: t_arr -= (p_rate / 100) * 1.0
+            if req["start"] < start_idx or req["ends"][-1] < start_idx: t_arr -= (p_rate / 100) * 1.0
             if "분할" in logic:
                 mid_f = (tot_floors + start_idx) // 2
                 if (req["start"] > mid_f) != (el["id"] >= len(placements) / 2): t_arr += 40.0
@@ -252,34 +271,54 @@ def simulate_route_esg_sla_des(
         t_arrive = t_assign + move1_t
         wait_time = max(0.0, t_arrive - req["t_sp"])
         wait_times.append(wait_time)
-        t_board = t_arrive + d_eff
-        move2_t = get_phys_time(abs(req["start"] - req["end"]) * floor_height, max_velocity, acceleration)
-        t_drop = t_board + move2_t
-        t_finish = t_drop + d_eff
+        
+        # [수정] 다중 하차 시뮬레이션 로직
+        t_current = t_arrive + d_eff # 탑승 완료 시점
+        curr_el_pos = req["start"]
+        total_passengers = req.get("passengers", 1)
+        remaining_passengers = total_passengers
+        
+        for i, drop_f in enumerate(req["ends"]):
+            dist_move = abs(curr_el_pos - drop_f) * floor_height
+            move_t = get_phys_time(dist_move, max_velocity, acceleration)
+            t_current += move_t
+            
+            # 에너지 계산 (하중 반영)
+            mass = 500 + (remaining_passengers * 70)
+            e_move = ((mass * 9.8 * max_velocity * move_t) / (0.85 * 3600 * 1000))
+            if is_deliv: e_move *= 2.4
+            
+            rf = 1.05
+            if is_regen_on:
+                is_up = drop_f > curr_el_pos
+                is_heavy = (mass >= 800 or is_deliv)
+                if is_up and not is_heavy: rf = -0.35
+                elif not is_up and is_heavy: rf = -0.40
+                elif is_up and is_heavy: rf = 1.30
+                else: rf = 1.0
+            
+            if req["is_target"]: target_kwh += e_move * rf
+            
+            # 하차 처리
+            t_current += d_eff
+            curr_el_pos = drop_f
+            # 하차 인원 분산 (단순화: 균등 분산)
+            dropped = max(1, remaining_passengers // (len(req["ends"]) - i))
+            remaining_passengers -= dropped
+            
+        t_finish = t_current
         all_passenger_times.append(t_finish - req["t_sp"])
-        start_before_update = best_el["curr_f"]
-        best_el["curr_f"] = float(req["end"])
-        best_el["t_free"] = t_finish
-        active_finish_times.append(t_finish)
-
+        
         if req["is_target"]:
             target_time = t_finish - req["t_sp"]
-            # [수정] 인원수(하중)를 반영한 에너지 계산 (1인당 70kg 가정, 기본 500kg 자중)
-            total_mass = 500 + (req.get("passengers", 1) * 70)
-            e_m1 = ((total_mass * 9.8 * max_velocity * move1_t) / (0.85 * 3600 * 1000))
-            e_m2 = ((total_mass * 9.8 * max_velocity * move2_t) / (0.85 * 3600 * 1000))
-            if is_deliv: e_m1, e_m2 = e_m1 * 2.4, e_m2 * 2.4
-            rf1, rf2 = 1.05, 1.05
-            if is_regen_on:
-                rf1 = -0.35 if req["start"] > start_before_update else 1.05
-                is_up2 = req["end"] > req["start"]
-                is_heavy = (total_mass >= 800 or is_deliv)
-                if is_up2 and not is_heavy: rf2 = -0.35
-                elif not is_up2 and is_heavy: rf2 = -0.40
-                elif is_up2 and is_heavy: rf2 = 1.30
-                else: rf2 = 1.0
-            elif (req["end"] > req["start"]) and (total_mass >= 800 or is_deliv): rf2 = 1.30
-            target_kwh += (e_m1 * rf1) + (e_m2 * rf2) + (0.001 * w * (1.8 if is_deliv else 1.0))
+            # 타겟 승객 에너지 (첫 이동 포함)
+            e_m1 = ((500 * 9.8 * max_velocity * move1_t) / (0.85 * 3600 * 1000))
+            rf1 = -0.35 if is_regen_on and req["start"] > best_el["curr_f"] else 1.05
+            target_kwh += e_m1 * rf1 + (0.001 * w * (1.8 if is_deliv else 1.0))
+
+        best_el["curr_f"] = float(req["ends"][-1])
+        best_el["t_free"] = t_finish
+        active_finish_times.append(t_finish)
 
     return target_time, target_kwh, {
         "avg_wait_time": float(np.mean(wait_times)), "max_wait_time": float(np.max(wait_times)),
@@ -291,10 +330,13 @@ def build_strategy_timeline(config, saved_mode_label):
     demo_queue = []
     for i in range(8):
         start, end = generate_weighted_trip_by_time(saved_mode_label, idx_1f, total_fs, parking_usage_rate, stairs_floor)
-        # [수정] 타임라인 데모에서도 1~8명의 그룹 승객 반영
-        demo_queue.append(EventRequest(i + 1, random.uniform(0, 90), start, end, passengers=random.randint(1, 8)))
+        ps = random.randint(1, 8)
+        ends = generate_multi_drop_floors(start, end, ps, total_fs, idx_1f)
+        demo_queue.append(EventRequest(i + 1, random.uniform(0, 90), start, ends, passengers=ps))
     demo_queue.sort(key=lambda x: x.t_spawn)
     el_agents = [ElevatorAgent(f"EL-{chr(65 + i)}", float(config["placements"][i])) for i in range(num_elevators)]
+    
+    timeline_data = []
     for req in demo_queue:
         best_el, min_arrive_t = None, float("inf")
         for el_idx, el in enumerate(el_agents):
@@ -306,20 +348,41 @@ def build_strategy_timeline(config, saved_mode_label):
             t_arr = t_start + get_phys_time(dist_to_req, max_velocity, acceleration)
             if t_arr < min_arrive_t: min_arrive_t, best_el = t_arr, el
         if best_el is None: best_el = el_agents[0]
+        
         req.assigned_el = best_el.id_name
         req.t_assign = max(best_el.t_free, req.t_spawn)
         req.t_arrive = req.t_assign + get_phys_time(abs(best_el.current_floor - req.start_floor) * floor_height, max_velocity, acceleration)
         req.t_board = req.t_arrive + final_door_operating_time
-        req.t_drop = req.t_board + get_phys_time(abs(req.start_floor - req.end_floor) * floor_height, max_velocity, acceleration)
-        best_el.t_free, best_el.current_floor = req.t_drop + final_door_operating_time, req.end_floor
-    base_dt = pd.Timestamp("2026-06-07 08:00:00")
-    def fmt(s): return (base_dt + pd.Timedelta(seconds=int(s))).strftime("%H:%M:%S")
-    return pd.DataFrame([{
-        "호출 ID": f"REQ-{r.req_id}", "이동 동선": f"{FLOOR_LABELS[r.start_floor]} → {FLOOR_LABELS[r.end_floor]}",
-        "탑승 인원": f"{r.passengers}명", "배정 E/V": r.assigned_el, "1. 호출 발생": fmt(r.t_spawn), "2. E/V 배정": fmt(r.t_assign),
-        "3. 도착(문열림)": fmt(r.t_arrive), "4. 탑승 완료": fmt(r.t_board), "5. 목적지 하차": fmt(r.t_drop),
-        "대기시간": f"{r.t_arrive - r.t_spawn:.1f}초"
-    } for r in demo_queue])
+        
+        t_curr = req.t_board
+        curr_pos = req.start_floor
+        drop_times = []
+        for drop_f in req.end_floors:
+            t_curr += get_phys_time(abs(curr_pos - drop_f) * floor_height, max_velocity, acceleration)
+            drop_times.append(t_curr)
+            t_curr += final_door_operating_time
+            curr_pos = drop_f
+        
+        req.t_drops = drop_times
+        best_el.t_free, best_el.current_floor = t_curr, req.end_floors[-1]
+        
+        base_dt = pd.Timestamp("2026-06-07 08:00:00")
+        def fmt(s): return (base_dt + pd.Timedelta(seconds=int(s))).strftime("%H:%M:%S")
+        
+        timeline_data.append({
+            "호출 ID": f"REQ-{req.req_id}", 
+            "이동 동선": f"{FLOOR_LABELS[req.start_floor]} → " + " → ".join([FLOOR_LABELS[f] for f in req.end_floors]),
+            "탑승 인원": f"{req.passengers}명", 
+            "배정 E/V": req.assigned_el, 
+            "1. 호출 발생": fmt(req.t_spawn), 
+            "2. E/V 배정": fmt(req.t_assign),
+            "3. 도착(문열림)": fmt(req.t_arrive), 
+            "4. 탑승 완료": fmt(req.t_board), 
+            "5. 최종 하차": fmt(req.t_drops[-1]),
+            "대기시간": f"{req.t_arrive - req.t_spawn:.1f}초"
+        })
+        
+    return pd.DataFrame(timeline_data)
 
 def generate_shared_traffic_sample(mc_seed, target_start, target_end, p_lambda, mode_label_param, start_idx, tot_floors, p_rate, s_floor):
     np.random.seed(mc_seed); random.seed(mc_seed)
@@ -328,8 +391,10 @@ def generate_shared_traffic_sample(mc_seed, target_start, target_end, p_lambda, 
     requests = []
     for i in range(num_bg):
         s_f, e_f = generate_weighted_trip_by_time(mode_label_param, start_idx, tot_floors, p_rate, s_floor)
-        requests.append({"id": f"BG-{i}", "t_sp": random.uniform(0, 300), "start": s_f, "end": e_f, "is_target": False, "passengers": random.randint(1, 8)})
-    requests.append({"id": "TARGET", "t_sp": 150.0, "start": target_start, "end": target_end, "is_target": True, "passengers": 1})
+        ps = random.randint(1, 8)
+        e_fs = generate_multi_drop_floors(s_f, e_f, ps, tot_floors, start_idx)
+        requests.append({"id": f"BG-{i}", "t_sp": random.uniform(0, 300), "start": s_f, "ends": e_fs, "is_target": False, "passengers": ps})
+    requests.append({"id": "TARGET", "t_sp": 150.0, "start": target_start, "ends": [target_end], "is_target": True, "passengers": 1})
     requests.sort(key=lambda x: x["t_sp"])
     return requests, traffic_burst
 
