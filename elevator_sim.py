@@ -10,8 +10,11 @@ from copy import deepcopy
 GLOBAL_SEED = 42
 MONTE_CARLO_RUNS = 100 
 
-random.seed(GLOBAL_SEED)
-np.random.seed(GLOBAL_SEED)
+def reset_global_seeds():
+    random.seed(GLOBAL_SEED)
+    np.random.seed(GLOBAL_SEED)
+
+reset_global_seeds()
 
 # ----------------- [1] UI 및 페이지 전역 설정 -----------------
 st.set_page_config(page_title="Elevator ESG & SLA Lab", layout="wide")
@@ -20,12 +23,10 @@ st.subheader("⚡ 동선별 타임라인·SLA 달성률 및 회생제동 기반 
 
 st.markdown("""
 > 💡 **Simulation Methodology (연구 방법론):**
+> * **완벽한 재현성 (Reproducibility):** 동일 입력 시 항상 동일한 AI 배치와 추천 결과가 나오도록 캐싱과 시드 초기화를 강제했습니다.
 > * **개별 동선 추적:** 4개 동선(1층↔거주층, 주차장↔거주층)의 실시간 소요 시간과 개별 SLA 달성률을 정밀 모니터링합니다.
-> * **DES Event-Driven 구조:** 승객 호출 대기열(Queue)이 쌓이면 엘리베이터가 `호출 → 배정 → 출발층 도착 → 탑승 → 목적지 하차`의 이벤트를 순차적으로 처리합니다.
-> * **시간대별 수요 가중치:** 출근 시간(95% 하행), 퇴근 시간(95% 상행) 등 현실적인 수요 패턴을 엄격히 반영합니다.
-> * **서비스 품질 우선(Quality-First):** 대기시간이 가장 긴 최악의 전략은 추천에서 강제 배제하며, SLA와 대기시간 지표에 압도적인 가중치를 부여합니다.
-> * **몬테카를로 시뮬레이션 & 통계 분석 (안정화):** 각 시나리오별 동일한 트래픽 샘플을 모든 전략이 공유하며, 고정된 랜덤 시드 스트림(GLOBAL_SEED + mc_index) 기반으로 완벽히 재현 가능한 지표를 산출합니다.
-> * **종합 KPI 스코어링 (현실성 강화):** $Score = 0.40 \\times SLA + 0.30 \\times Wait + 0.10 \\times Queue + 0.05 \\times Energy + 0.05 \\times Carbon + 0.10 \\times Fitness$의 정규화 평가.
+> * **서비스 품질 우선(Quality-First):** 대기시간 최악 전략은 추천에서 배제하며, SLA와 대기시간에 70% 가중치를 부여합니다.
+> * **몬테카를로 시뮬레이션 & 통계 분석:** 각 시나리오별 동일 트래픽 샘플 공유 및 고정 시드 스트림 기반 연산을 수행합니다.
 """)
 
 # ----------------- [2] SIDEBAR: 설정 변수 -----------------
@@ -120,8 +121,6 @@ def generate_weighted_trip_by_time(mode_label, start_idx, tot_floors, parking_ra
     residential_min = min(tot_floors - 1, start_idx + stairs_floor + 1)
     residential_floors = list(range(residential_min, tot_floors))
     if not residential_floors: residential_floors = list(range(start_idx + 1, tot_floors))
-    
-    # [수정] 지하층(주차장)을 최하층(0)만 쓰는게 아니라 전체 지하층에서 랜덤 선택하도록 수정
     parking_floors = list(range(0, start_idx))
     lobby_floor = start_idx
 
@@ -149,8 +148,18 @@ def generate_weighted_trip_by_time(mode_label, start_idx, tot_floors, parking_ra
     if start == end: end = pick_residential_floor() if start == lobby_floor else lobby_floor
     return start, end
 
-def format_placements(placements):
-    return ", ".join([FLOOR_LABELS[p] for p in placements])
+@st.cache_data
+def get_stable_demand_profile(m_label, start_idx, tot_fs, p_rate, s_floor):
+    # 캐시된 수요 프로필 생성 (시뮬레이션 간 변동 방지)
+    random.seed(GLOBAL_SEED)
+    np.random.seed(GLOBAL_SEED)
+    start_counts = np.zeros(tot_fs)
+    heatmap_data = []
+    for _ in range(5000):
+        s, e = generate_weighted_trip_by_time(m_label, start_idx, tot_fs, p_rate, s_floor)
+        start_counts[s] += 1
+        heatmap_data.append({"Start Floor": FLOOR_LABELS[s], "End Floor": FLOOR_LABELS[e]})
+    return start_counts, pd.DataFrame(heatmap_data)
 
 def format_el_placements(placements):
     return ", ".join([f"EL {chr(65 + i)}:{FLOOR_LABELS[p]}" for i, p in enumerate(placements)])
@@ -308,16 +317,6 @@ def build_strategy_timeline(config, saved_mode_label):
         "대기시간": f"{r.t_arrive - r.t_spawn:.1f}초"
     } for r in demo_queue])
 
-def generate_demand_profile(m_label, samples=5000):
-    random.seed(GLOBAL_SEED)
-    start_counts = np.zeros(total_fs)
-    heatmap_data = []
-    for _ in range(samples):
-        s, e = generate_weighted_trip_by_time(m_label, idx_1f, total_fs, parking_usage_rate, stairs_floor)
-        start_counts[s] += 1
-        heatmap_data.append({"Start Floor": FLOOR_LABELS[s], "End Floor": FLOOR_LABELS[e]})
-    return start_counts, pd.DataFrame(heatmap_data)
-
 def generate_shared_traffic_sample(mc_seed, target_start, target_end, p_lambda, mode_label_param, start_idx, tot_floors, p_rate, s_floor):
     np.random.seed(mc_seed); random.seed(mc_seed)
     traffic_burst = np.random.poisson(p_lambda)
@@ -331,9 +330,10 @@ def generate_shared_traffic_sample(mc_seed, target_start, target_end, p_lambda, 
     return requests, traffic_burst
 
 # ----------------- 운영 전략 대기 포지션 맵 빌드 -----------------
+reset_global_seeds()
 strategies_config = {}
 mid_idx = (total_fs + idx_1f) // 2
-demand_counts, df_heatmap = generate_demand_profile(mode_label)
+demand_counts, df_heatmap = get_stable_demand_profile(mode_label, idx_1f, total_fs, parking_usage_rate, stairs_floor)
 top_demand_floors = np.argsort(demand_counts)[-num_elevators:]
 
 p_base = 0 if parking_usage_rate > 50 else idx_1f
@@ -366,6 +366,7 @@ with c_env2: delivery_mode = st.toggle("📦 배달 패널티 활성화", value=
 
 if "strategy_results" not in st.session_state: st.session_state.strategy_results = None
 if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", type="primary", use_container_width=True):
+    reset_global_seeds() # 버튼 클릭 시 시드 강제 초기화
     progress_bar, status_text = st.progress(0), st.empty()
     avg_res_f = int(idx_1f + (max_f - 1) * 0.7)
     scenarios = {"1층 ⬆️ 거주층": (idx_1f, avg_res_f, lim_1f_up), "거주층 ⬇️ 1층": (avg_res_f, idx_1f, lim_res_1f), "주차장 ⬆️ 거주층": (0, avg_res_f, lim_p_up), "거주층 ⬇️ 주차장": (avg_res_f, 0, lim_res_p)}
@@ -434,11 +435,12 @@ if st.session_state.strategy_results:
     is_worst_wait = (agg["평균 대기시간"] == max_wait_val)
     agg.loc[is_worst_wait, "Final Score"] = 0.0
     
-    best = agg.sort_values("Final Score", ascending=False).iloc[0]
+    # [수정] Stable Sort 적용: 점수가 같을 경우 이름순으로 고정하여 순위 변동 방지
+    best = agg.sort_values(["Final Score", "운영 전략"], ascending=[False, True]).iloc[0]
     st.write("### 🏆 종합 KPI 스코어 및 시간대 추천 엔진")
     col1, col2 = st.columns([1.5, 1])
     with col1: 
-        display_agg = agg[["운영 전략", "AI 배치층", "Final Score", "SLA 달성률", "평균 대기시간", "평균 Queue 길이", "전기 요금(원)", "탄소 배출량(g)", "Fitness", "Std"]].sort_values("Final Score", ascending=False)
+        display_agg = agg[["운영 전략", "AI 배치층", "Final Score", "SLA 달성률", "평균 대기시간", "평균 Queue 길이", "전기 요금(원)", "탄소 배출량(g)", "Fitness", "Std"]].sort_values(["Final Score", "운영 전략"], ascending=[False, True])
         st.dataframe(display_agg.style.format({
             "Final Score": "{:.2f}", "SLA 달성률": "{:.1f}%", "평균 대기시간": "{:.1f}초", "평균 Queue 길이": "{:.2f}",
             "전기 요금(원)": "{:,.0f}원", "탄소 배출량(g)": "{:,.1f}g", "Fitness": "{:.1f}", "Std": "{:.2f}"
