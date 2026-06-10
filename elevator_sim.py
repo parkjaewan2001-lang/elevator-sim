@@ -59,6 +59,11 @@ with st.sidebar:
     base_door_time = st.number_input("기본 전체 문 시간 (초) [대기포함]", value=7.0, min_value=fixed_door_moving_time + 0.5, step=0.5)
     button_efficiency = st.number_input("🔘 닫힘 버튼 효율 (%)", value=40, min_value=0, max_value=100, step=5)
 
+    # [수정] NameError 방지를 위한 계산 로직 추가
+    pure_dwell_time = max(0.0, base_door_time - fixed_door_moving_time)
+    saved_door_time = pure_dwell_time * (button_efficiency / 100)
+    final_door_operating_time = base_door_time - saved_door_time
+
     st.divider()
     st.header("⚠️ 서비스 임계치 (SLA) 설정")
     lim_1f_up = st.number_input("SLA: 1층 → 거주층 (초)", value=45, min_value=10)
@@ -375,7 +380,6 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
             m_time, m_kwh, m_wait, m_q, m_sla = df_mc["time"].mean(), df_mc["kwh"].mean(), df_mc["wait"].mean(), df_mc["q"].mean(), df_mc["sla"].mean()
             std_time = df_mc["time"].std()
 
-            # Time-of-Day Fitness Calculation
             fitness = 0.0
             avg_p = np.mean(config["placements"])
             if mode_label == "출근 시간": fitness = 100.0 if avg_p > mid_idx else 30.0
@@ -397,12 +401,11 @@ if st.session_state.strategy_results:
     df, saved_mode = st.session_state.strategy_results["df"], st.session_state.strategy_results["mode"]
     agg = df.groupby("운영 전략").agg({"SLA 달성률": "mean", "평균 대기시간": "mean", "평균 Queue 길이": "mean", "전력 소비량(kWh)": "sum", "탄소 배출량(g)": "sum", "Fitness": "mean", "Std": "mean"}).reset_index()
     
-    # Normalization & KPI
     for c in ["SLA 달성률", "Fitness"]: agg[c+"_s"] = (agg[c] - agg[c].min()) / (agg[c].max() - agg[c].min() + 1e-6) * 100
     for c in ["평균 대기시간", "평균 Queue 길이", "전력 소비량(kWh)", "탄소 배출량(g)", "Std"]: agg[c+"_s"] = (agg[c].max() - agg[c]) / (agg[c].max() - agg[c].min() + 1e-6) * 100
     
     agg["Final Score"] = 0.30*agg["SLA 달성률_s"] + 0.25*agg["평균 대기시간_s"] + 0.15*agg["평균 Queue 길이_s"] + 0.10*agg["전력 소비량(kWh)_s"] + 0.10*agg["탄소 배출량(g)_s"] + 0.10*agg["Fitness_s"]
-    agg["Final Score"] += agg["Std_s"] * 0.05 # Stability Bonus
+    agg["Final Score"] += agg["Std_s"] * 0.05
     
     best = agg.sort_values("Final Score", ascending=False).iloc[0]
     st.write("### 🏆 종합 KPI 스코어 및 시간대 추천 엔진")
