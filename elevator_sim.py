@@ -59,7 +59,6 @@ with st.sidebar:
     base_door_time = st.number_input("기본 전체 문 시간 (초) [대기포함]", value=7.0, min_value=fixed_door_moving_time + 0.5, step=0.5)
     button_efficiency = st.number_input("🔘 닫힘 버튼 효율 (%)", value=40, min_value=0, max_value=100, step=5)
 
-    # [수정] NameError 방지를 위한 계산 로직 추가
     pure_dwell_time = max(0.0, base_door_time - fixed_door_moving_time)
     saved_door_time = pure_dwell_time * (button_efficiency / 100)
     final_door_operating_time = base_door_time - saved_door_time
@@ -399,7 +398,17 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
 
 if st.session_state.strategy_results:
     df, saved_mode = st.session_state.strategy_results["df"], st.session_state.strategy_results["mode"]
-    agg = df.groupby("운영 전략").agg({"SLA 달성률": "mean", "평균 대기시간": "mean", "평균 Queue 길이": "mean", "전력 소비량(kWh)": "sum", "탄소 배출량(g)": "sum", "Fitness": "mean", "Std": "mean"}).reset_index()
+    # [수정] AI 배치층 정보를 보존하기 위해 agg 생성 시 first() 사용
+    agg = df.groupby("운영 전략").agg({
+        "AI 배치층": "first",
+        "SLA 달성률": "mean", 
+        "평균 대기시간": "mean", 
+        "평균 Queue 길이": "mean", 
+        "전력 소비량(kWh)": "sum", 
+        "탄소 배출량(g)": "sum", 
+        "Fitness": "mean", 
+        "Std": "mean"
+    }).reset_index()
     
     for c in ["SLA 달성률", "Fitness"]: agg[c+"_s"] = (agg[c] - agg[c].min()) / (agg[c].max() - agg[c].min() + 1e-6) * 100
     for c in ["평균 대기시간", "평균 Queue 길이", "전력 소비량(kWh)", "탄소 배출량(g)", "Std"]: agg[c+"_s"] = (agg[c].max() - agg[c]) / (agg[c].max() - agg[c].min() + 1e-6) * 100
@@ -410,7 +419,7 @@ if st.session_state.strategy_results:
     best = agg.sort_values("Final Score", ascending=False).iloc[0]
     st.write("### 🏆 종합 KPI 스코어 및 시간대 추천 엔진")
     col1, col2 = st.columns([1.5, 1])
-    with col1: st.dataframe(agg[["운영 전략", "Final Score", "SLA 달성률", "평균 대기시간", "평균 Queue 길이", "Fitness", "Std"]].sort_values("Final Score", ascending=False), use_container_width=True)
+    with col1: st.dataframe(agg[["운영 전략", "AI 배치층", "Final Score", "SLA 달성률", "평균 대기시간", "평균 Queue 길이", "Fitness", "Std"]].sort_values("Final Score", ascending=False), use_container_width=True)
     with col2:
         st.success(f"**최적 전략: {best['운영 전략']}**\n* KPI: {best['Final Score']:.2f}\n* SLA: {best['SLA 달성률']:.1f}%\n* 대기시간: {best['평균 대기시간']:.1f}초\n* Fitness: {best['Fitness']:.1f}")
         if saved_mode == "출근 시간" and np.mean(strategies_config[best['운영 전략']]['placements']) < mid_idx: st.warning("⚠️ 출근 시간 경고: 로비 대기 비중이 높습니다.")
