@@ -23,8 +23,7 @@ st.markdown("""
 > * **개별 동선 추적:** 4개 동선(1층↔거주층, 주차장↔거주층)의 실시간 소요 시간과 개별 SLA 달성률을 정밀 모니터링합니다.
 > * **DES Event-Driven 구조:** 승객 호출 대기열(Queue)이 쌓이면 엘리베이터가 `호출 → 배정 → 출발층 도착 → 탑승 → 목적지 하차`의 이벤트를 순차적으로 처리합니다.
 > * **시간대별 수요 가중치:** 출근 시간(95% 하행), 퇴근 시간(95% 상행) 등 현실적인 수요 패턴을 엄격히 반영합니다.
-> * **Queue 지표 추가:** 모든 운영 전략별로 평균 대기시간, 최대 대기시간, 평균 Queue 길이를 산출합니다.
-> * **표준 물리 참조 및 회생제동 모델:** 기어리스 동기모터(Efficiency 85%) 및 KEPCO 요금제 기준.
+> * **주차장 이용 비율:** 주차장 이용 비율(%)에 따라 지하층(B1 등)이 주요 출발/도착지가 되도록 엔진을 정밀화했습니다.
 > * **몬테카를로 시뮬레이션 & 통계 분석 (안정화):** 각 시나리오별 동일한 트래픽 샘플을 모든 전략이 공유하며, 고정된 랜덤 시드 스트림(GLOBAL_SEED + mc_index) 기반으로 완벽히 재현 가능한 지표를 산출합니다.
 > * **종합 KPI 스코어링 (현실성 강화):** $Score = 0.30 \\times SLA + 0.25 \\times Wait + 0.15 \\times Queue + 0.10 \\times Energy + 0.10 \\times Carbon + 0.10 \\times Fitness$의 정규화 평가.
 """)
@@ -379,10 +378,16 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
             m_time, m_kwh, m_wait, m_q, m_sla = df_mc["time"].mean(), df_mc["kwh"].mean(), df_mc["wait"].mean(), df_mc["q"].mean(), df_mc["sla"].mean()
             std_time = df_mc["time"].std()
 
+            # [수정] Fitness 로직 강화: 주차장 이용 비율 반영
             fitness = 0.0
             avg_p = np.mean(config["placements"])
-            if mode_label == "출근 시간": fitness = 100.0 if avg_p > mid_idx else 30.0
-            elif mode_label == "퇴근 시간": fitness = 100.0 if avg_p < mid_idx else 30.0
+            if mode_label == "출근 시간":
+                # 출근 시 고층 대기가 유리하나, 주차장 이용률이 높으면 저층 복귀도 어느정도 필요
+                fitness = 100.0 if avg_p > mid_idx else 30.0
+            elif mode_label == "퇴근 시간":
+                # 퇴근 시 주차장 이용률이 높으면 지하(0)층 근처 배치가 압도적으로 유리해야 함
+                target_base = 0 if parking_usage_rate > 50 else idx_1f
+                fitness = 100.0 if avg_p <= target_base + 2 else 30.0
             elif mode_label == "낮 시간": fitness = 100.0 if abs(avg_p - mid_idx) < 5 else 50.0
             elif mode_label == "저녁 시간": fitness = 100.0 if (idx_1f <= avg_p <= mid_idx) else 40.0
             elif mode_label == "새벽 시간": fitness = 100.0 if avg_p < idx_1f + 2 else 40.0
@@ -429,8 +434,12 @@ if st.session_state.strategy_results:
         }), use_container_width=True)
     with col2:
         st.success(f"**최적 전략: {best['운영 전략']}**\n* KPI: {best['Final Score']:.2f}\n* SLA: {best['SLA 달성률']:.1f}%\n* 대기시간: {best['평균 대기시간']:.1f}초\n* Fitness: {best['Fitness']:.1f}")
-        if saved_mode == "출근 시간" and np.mean(strategies_config[best['운영 전략']]['placements']) < mid_idx: st.warning("⚠️ 출근 시간 경고: 로비 대기 비중이 높습니다.")
-        if saved_mode == "퇴근 시간" and np.mean(strategies_config[best['운영 전략']]['placements']) > mid_idx: st.warning("⚠️ 퇴근 시간 경고: 고층 대기 비중이 높습니다.")
+        # [수정] 경고 로직에 주차장 이용 비율 반영
+        avg_placement = np.mean(strategies_config[best['운영 전략']]['placements'])
+        if saved_mode == "출근 시간" and avg_placement < mid_idx: st.warning("⚠️ 출근 시간 경고: 로비 대기 비중이 높습니다.")
+        if saved_mode == "퇴근 시간":
+            target_limit = 0 if parking_usage_rate > 50 else idx_1f
+            if avg_placement > target_limit + 5: st.warning("⚠️ 퇴근 시간 경고: 고층 대기 비중이 높습니다. (주차장 수요 미대응)")
 
     st.write("### 📈 전략 비교 매트릭스")
     st.dataframe(df.pivot(index="운영 전략", columns="동선 시나리오", values="실제 소요시간"), use_container_width=True)
