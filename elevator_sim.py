@@ -120,11 +120,16 @@ def generate_weighted_trip_by_time(mode_label, start_idx, tot_floors, parking_ra
     residential_min = min(tot_floors - 1, start_idx + stairs_floor + 1)
     residential_floors = list(range(residential_min, tot_floors))
     if not residential_floors: residential_floors = list(range(start_idx + 1, tot_floors))
-    parking_floor = 0
+    
+    # [수정] 지하층(주차장)을 최하층(0)만 쓰는게 아니라 전체 지하층에서 랜덤 선택하도록 수정
+    parking_floors = list(range(0, start_idx))
     lobby_floor = start_idx
 
     def pick_residential_floor(): return int(random.choice(residential_floors))
-    def pick_lobby_or_parking(): return parking_floor if random.random() < parking_rate / 100 else lobby_floor
+    def pick_lobby_or_parking(): 
+        if random.random() < parking_rate / 100:
+            return int(random.choice(parking_floors)) if parking_floors else 0
+        return lobby_floor
 
     if mode_label == "출근 시간":
         if random.random() < 0.95: start, end = pick_residential_floor(), pick_lobby_or_parking()
@@ -441,7 +446,6 @@ if st.session_state.strategy_results:
     with col2:
         st.success(f"**최적 전략: {best['운영 전략']}**\n* KPI: {best['Final Score']:.2f}\n* SLA: {best['SLA 달성률']:.1f}%\n* 대기시간: {best['평균 대기시간']:.1f}초\n* Fitness: {best['Fitness']:.1f}")
         
-        # [수정] KeyError 방어 로직 추가 및 명칭 일치 보장
         target_strat = best['운영 전략']
         if target_strat in strategies_config:
             ps_best = strategies_config[target_strat]['placements']
@@ -456,7 +460,6 @@ if st.session_state.strategy_results:
     st.dataframe(df.pivot(index="운영 전략", columns="동선 시나리오", values="실제 소요시간"), use_container_width=True)
     
     st.write("### 📊 DES 이벤트 타임라인 (최적 전략 기준)")
-    # [수정] KeyError 방어 로직
     if best['운영 전략'] in strategies_config:
         st.dataframe(build_strategy_timeline(strategies_config[best['운영 전략']], saved_mode), use_container_width=True)
 
