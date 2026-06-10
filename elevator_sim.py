@@ -23,9 +23,9 @@ st.markdown("""
 > * **개별 동선 추적:** 4개 동선(1층↔거주층, 주차장↔거주층)의 실시간 소요 시간과 개별 SLA 달성률을 정밀 모니터링합니다.
 > * **DES Event-Driven 구조:** 승객 호출 대기열(Queue)이 쌓이면 엘리베이터가 `호출 → 배정 → 출발층 도착 → 탑승 → 목적지 하차`의 이벤트를 순차적으로 처리합니다.
 > * **시간대별 수요 가중치:** 출근 시간(95% 하행), 퇴근 시간(95% 상행) 등 현실적인 수요 패턴을 엄격히 반영합니다.
-> * **주차장 이용 비율:** 주차장 이용 비율(%)에 따라 지하층(B1 등)이 주요 출발/도착지가 되도록 엔진을 정밀화했습니다.
+> * **서비스 품질 우선(Quality-First):** 대기시간이 가장 긴 최악의 전략은 추천에서 강제 배제하며, SLA와 대기시간 지표에 압도적인 가중치를 부여합니다.
 > * **몬테카를로 시뮬레이션 & 통계 분석 (안정화):** 각 시나리오별 동일한 트래픽 샘플을 모든 전략이 공유하며, 고정된 랜덤 시드 스트림(GLOBAL_SEED + mc_index) 기반으로 완벽히 재현 가능한 지표를 산출합니다.
-> * **종합 KPI 스코어링 (현실성 강화):** $Score = 0.30 \\times SLA + 0.25 \\times Wait + 0.15 \\times Queue + 0.10 \\times Energy + 0.10 \\times Carbon + 0.10 \\times Fitness$의 정규화 평가.
+> * **종합 KPI 스코어링 (현실성 강화):** $Score = 0.40 \\times SLA + 0.30 \\times Wait + 0.10 \\times Queue + 0.05 \\times Energy + 0.05 \\times Carbon + 0.10 \\times Fitness$의 정규화 평가.
 """)
 
 # ----------------- [2] SIDEBAR: 설정 변수 -----------------
@@ -331,10 +331,6 @@ mid_idx = (total_fs + idx_1f) // 2
 demand_counts, df_heatmap = generate_demand_profile(mode_label)
 top_demand_floors = np.argsort(demand_counts)[-num_elevators:]
 
-# [수정] AI 전략들의 배치 로직을 주차장 이용 비율에 따라 동적으로 생성
-def get_ai_placements(base_idx, target_idx, count):
-    return [int(x) for x in np.linspace(base_idx, target_idx, count)]
-
 p_base = 0 if parking_usage_rate > 50 else idx_1f
 
 strategies_config["전략 미적용 (랜덤 운행)"] = {"placements": [idx_1f] * num_elevators, "logic": "자유 운행", "desc": "무작위 방치 상태"}
@@ -343,10 +339,10 @@ strategies_config["고층부/저층부 분할배치"] = {"placements": [int(idx_
 strategies_config["베이스 스테이션 집중"] = {"placements": [p_base] * num_elevators, "logic": "베이스 스테이션 집중", "desc": "무조건 로비/지하 복귀"}
 strategies_config["동적 간격 배치"] = {"placements": [int(f) for f in np.linspace(0, total_fs - 1, num_elevators)], "logic": "동적 간격", "desc": "전체 층수 등간격 분산"}
 strategies_config["AI 자동 최적화"] = {"placements": sorted([int(f) for f in top_demand_floors]), "logic": "AI 자동 최적화", "desc": "수요 히트맵 기반 최적 배치"}
-strategies_config["AI Generated Strategy #1 (로비/지하 집중형)"] = {"placements": [p_base] * num_elevators, "logic": "자유 운행", "desc": "출발층 밀집"}
-strategies_config["AI Generated Strategy #2 (하방 분산형)"] = {"placements": get_ai_placements(p_base, mid_idx, num_elevators), "logic": "자유 운행", "desc": "하방 저층 분산"}
+strategies_config["AI Generated Strategy #1 (출발층 집중형)"] = {"placements": [p_base] * num_elevators, "logic": "자유 운행", "desc": "로비/지하 밀집"}
+strategies_config["AI Generated Strategy #2 (하방 분산형)"] = {"placements": [int(x) for x in np.linspace(p_base, mid_idx, num_elevators)], "logic": "자유 운행", "desc": "하방 저층 분산"}
 strategies_config["AI Generated Strategy #3 (중층 집중형)"] = {"placements": [mid_idx] * num_elevators, "logic": "자유 운행", "desc": "중심부 밀집"}
-strategies_config["AI Generated Strategy #4 (고층 집중형)"] = {"placements": get_ai_placements(mid_idx, total_fs - 1, num_elevators), "logic": "자유 운행", "desc": "상방 고층 집중"}
+strategies_config["AI Generated Strategy #4 (고층 집중형)"] = {"placements": [int(x) for x in np.linspace(mid_idx, total_fs - 1, num_elevators)], "logic": "자유 운행", "desc": "상방 고층 집중"}
 strategies_config["AI Generated Strategy #5 (균등 분산형)"] = {"placements": [int(x) for x in np.linspace(0, total_fs - 1, num_elevators)], "logic": "자유 운행", "desc": "균등 수평 분산"}
 strategies_config["사용자 수동 배치"] = {"placements": manual_placements, "logic": "자유 운행", "desc": "연구원 임의 배치"}
 
@@ -385,16 +381,14 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
             m_time, m_kwh, m_wait, m_q, m_sla = df_mc["time"].mean(), df_mc["kwh"].mean(), df_mc["wait"].mean(), df_mc["q"].mean(), df_mc["sla"].mean()
             std_time = df_mc["time"].std()
 
-            # [수정] Fitness 로직 고도화: 주요 수요 지점에 최소 한 대 배치 여부 체크
             fitness = 0.0
             ps = config["placements"]
             if mode_label == "출근 시간":
                 fitness = 100.0 if any(p > mid_idx for p in ps) else 30.0
             elif mode_label == "퇴근 시간":
                 target_f = 0 if parking_usage_rate > 50 else idx_1f
-                # 주요 수요 지점(지하/로비) 근처에 한 대라도 있으면 가점
-                fitness = 100.0 if any(abs(p - target_f) <= 1 for p in ps) else 20.0
-                if strat_name == "홀짝수층 분리 운행": fitness -= 10.0 # 주차장 대응 불가 패널티
+                fitness = 100.0 if any(abs(p - target_f) <= 1 for p in ps) else 0.0
+                if strat_name == "홀짝수층 분리 운행": fitness = 0.0 # 주차장 대응 불가 시 0점 강제
             elif mode_label == "낮 시간": fitness = 100.0 if any(abs(p - mid_idx) < 5 for p in ps) else 50.0
             elif mode_label == "저녁 시간": fitness = 100.0 if any(idx_1f <= p <= mid_idx for p in ps) else 40.0
             elif mode_label == "새벽 시간": fitness = 100.0 if any(p < idx_1f + 2 for p in ps) else 40.0
@@ -424,11 +418,19 @@ if st.session_state.strategy_results:
         "Std": "mean"
     }).reset_index()
     
+    # [수정] 서비스 품질 가중치 압도적 강화
     for c in ["SLA 달성률", "Fitness"]: agg[c+"_s"] = (agg[c] - agg[c].min()) / (agg[c].max() - agg[c].min() + 1e-6) * 100
     for c in ["평균 대기시간", "평균 Queue 길이", "전력 소비량(kWh)", "탄소 배출량(g)", "Std"]: agg[c+"_s"] = (agg[c].max() - agg[c]) / (agg[c].max() - agg[c].min() + 1e-6) * 100
     
-    agg["Final Score"] = 0.30*agg["SLA 달성률_s"] + 0.25*agg["평균 대기시간_s"] + 0.15*agg["평균 Queue 길이_s"] + 0.10*agg["전력 소비량(kWh)_s"] + 0.10*agg["탄소 배출량(g)_s"] + 0.10*agg["Fitness_s"]
+    # [수정] 가중치: SLA(40%) + Wait(30%) = 서비스 품질 70% 반영
+    agg["Final Score"] = 0.40*agg["SLA 달성률_s"] + 0.30*agg["평균 대기시간_s"] + 0.10*agg["평균 Queue 길이_s"] + 0.05*agg["전력 소비량(kWh)_s"] + 0.05*agg["탄소 배출량(g)_s"] + 0.10*agg["Fitness_s"]
     agg["Final Score"] += agg["Std_s"] * 0.05
+    
+    # [수정] 대기시간 최악 전략 추천 배제 로직
+    max_wait_val = agg["평균 대기시간"].max()
+    is_worst_wait = (agg["평균 대기시간"] == max_wait_val)
+    # 최악 대기시간 전략은 점수를 0점으로 강제 삭감하여 추천 배제
+    agg.loc[is_worst_wait, "Final Score"] = 0.0
     
     best = agg.sort_values("Final Score", ascending=False).iloc[0]
     st.write("### 🏆 종합 KPI 스코어 및 시간대 추천 엔진")
