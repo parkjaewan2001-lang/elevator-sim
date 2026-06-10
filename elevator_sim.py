@@ -23,8 +23,8 @@ st.subheader("⚡ 동선별 타임라인·SLA 달성률 및 회생제동 기반 
 
 st.markdown("""
 > 💡 **Simulation Methodology (연구 방법론):**
+> * **현실적 그룹 탑승 (Group Boarding):** 이제 승객은 혼자가 아닌 **1~8명의 그룹** 단위로 생성되며, 인원수에 따라 엘리베이터의 하중과 에너지 소비량이 정밀하게 계산됩니다.
 > * **완벽한 재현성 (Reproducibility):** 동일 입력 시 항상 동일한 AI 배치와 추천 결과가 나오도록 캐싱과 시드 초기화를 강제했습니다.
-> * **개별 동선 추적:** 4개 동선(1층↔거주층, 주차장↔거주층)의 실시간 소요 시간과 개별 SLA 달성률을 정밀 모니터링합니다.
 > * **서비스 품질 우선(Quality-First):** 대기시간 최악 전략은 추천에서 배제하며, SLA와 대기시간에 70% 가중치를 부여합니다.
 > * **몬테카를로 시뮬레이션 & 통계 분석:** 각 시나리오별 동일 트래픽 샘플 공유 및 고정 시드 스트림 기반 연산을 수행합니다.
 """)
@@ -150,7 +150,6 @@ def generate_weighted_trip_by_time(mode_label, start_idx, tot_floors, parking_ra
 
 @st.cache_data
 def get_stable_demand_profile(m_label, start_idx, tot_fs, p_rate, s_floor):
-    # 캐시된 수요 프로필 생성 (시뮬레이션 간 변동 방지)
     random.seed(GLOBAL_SEED)
     np.random.seed(GLOBAL_SEED)
     start_counts = np.zeros(tot_fs)
@@ -197,8 +196,10 @@ def simulate_route_esg_sla_des(
         requests = []
         for i in range(num_bg):
             s_f, e_f = generate_weighted_trip_by_time(mode_label, start_idx, tot_floors, p_rate, s_floor)
-            requests.append({"id": f"BG-{i}", "t_sp": random.uniform(0, 300), "start": s_f, "end": e_f, "is_target": False})
-        requests.append({"id": "TARGET", "t_sp": 150.0, "start": target_start, "end": target_end, "is_target": True})
+            # [수정] 1~8명의 그룹 승객 생성
+            passengers = random.randint(1, 8)
+            requests.append({"id": f"BG-{i}", "t_sp": random.uniform(0, 300), "start": s_f, "end": e_f, "is_target": False, "passengers": passengers})
+        requests.append({"id": "TARGET", "t_sp": 150.0, "start": target_start, "end": target_end, "is_target": True, "passengers": 1})
         requests.sort(key=lambda x: x["t_sp"])
 
     elevs = [{"id": i, "t_free": 0.0, "curr_f": float(placements[i])} for i in range(len(placements))]
@@ -263,19 +264,21 @@ def simulate_route_esg_sla_des(
 
         if req["is_target"]:
             target_time = t_finish - req["t_sp"]
-            e_m1 = ((500 * 9.8 * max_velocity * move1_t) / (0.85 * 3600 * 1000))
-            e_m2 = ((500 * 9.8 * max_velocity * move2_t) / (0.85 * 3600 * 1000))
+            # [수정] 인원수(하중)를 반영한 에너지 계산 (1인당 70kg 가정, 기본 500kg 자중)
+            total_mass = 500 + (req.get("passengers", 1) * 70)
+            e_m1 = ((total_mass * 9.8 * max_velocity * move1_t) / (0.85 * 3600 * 1000))
+            e_m2 = ((total_mass * 9.8 * max_velocity * move2_t) / (0.85 * 3600 * 1000))
             if is_deliv: e_m1, e_m2 = e_m1 * 2.4, e_m2 * 2.4
             rf1, rf2 = 1.05, 1.05
             if is_regen_on:
                 rf1 = -0.35 if req["start"] > start_before_update else 1.05
                 is_up2 = req["end"] > req["start"]
-                is_heavy = (w >= 1.2 or is_deliv)
+                is_heavy = (total_mass >= 800 or is_deliv)
                 if is_up2 and not is_heavy: rf2 = -0.35
                 elif not is_up2 and is_heavy: rf2 = -0.40
                 elif is_up2 and is_heavy: rf2 = 1.30
                 else: rf2 = 1.0
-            elif (req["end"] > req["start"]) and (w >= 1.2 or is_deliv): rf2 = 1.30
+            elif (req["end"] > req["start"]) and (total_mass >= 800 or is_deliv): rf2 = 1.30
             target_kwh += (e_m1 * rf1) + (e_m2 * rf2) + (0.001 * w * (1.8 if is_deliv else 1.0))
 
     return target_time, target_kwh, {
@@ -288,7 +291,8 @@ def build_strategy_timeline(config, saved_mode_label):
     demo_queue = []
     for i in range(8):
         start, end = generate_weighted_trip_by_time(saved_mode_label, idx_1f, total_fs, parking_usage_rate, stairs_floor)
-        demo_queue.append(EventRequest(i + 1, random.uniform(0, 90), start, end))
+        # [수정] 타임라인 데모에서도 1~8명의 그룹 승객 반영
+        demo_queue.append(EventRequest(i + 1, random.uniform(0, 90), start, end, passengers=random.randint(1, 8)))
     demo_queue.sort(key=lambda x: x.t_spawn)
     el_agents = [ElevatorAgent(f"EL-{chr(65 + i)}", float(config["placements"][i])) for i in range(num_elevators)]
     for req in demo_queue:
@@ -312,7 +316,7 @@ def build_strategy_timeline(config, saved_mode_label):
     def fmt(s): return (base_dt + pd.Timedelta(seconds=int(s))).strftime("%H:%M:%S")
     return pd.DataFrame([{
         "호출 ID": f"REQ-{r.req_id}", "이동 동선": f"{FLOOR_LABELS[r.start_floor]} → {FLOOR_LABELS[r.end_floor]}",
-        "배정 E/V": r.assigned_el, "1. 호출 발생": fmt(r.t_spawn), "2. E/V 배정": fmt(r.t_assign),
+        "탑승 인원": f"{r.passengers}명", "배정 E/V": r.assigned_el, "1. 호출 발생": fmt(r.t_spawn), "2. E/V 배정": fmt(r.t_assign),
         "3. 도착(문열림)": fmt(r.t_arrive), "4. 탑승 완료": fmt(r.t_board), "5. 목적지 하차": fmt(r.t_drop),
         "대기시간": f"{r.t_arrive - r.t_spawn:.1f}초"
     } for r in demo_queue])
@@ -324,8 +328,8 @@ def generate_shared_traffic_sample(mc_seed, target_start, target_end, p_lambda, 
     requests = []
     for i in range(num_bg):
         s_f, e_f = generate_weighted_trip_by_time(mode_label_param, start_idx, tot_floors, p_rate, s_floor)
-        requests.append({"id": f"BG-{i}", "t_sp": random.uniform(0, 300), "start": s_f, "end": e_f, "is_target": False})
-    requests.append({"id": "TARGET", "t_sp": 150.0, "start": target_start, "end": target_end, "is_target": True})
+        requests.append({"id": f"BG-{i}", "t_sp": random.uniform(0, 300), "start": s_f, "end": e_f, "is_target": False, "passengers": random.randint(1, 8)})
+    requests.append({"id": "TARGET", "t_sp": 150.0, "start": target_start, "end": target_end, "is_target": True, "passengers": 1})
     requests.sort(key=lambda x: x["t_sp"])
     return requests, traffic_burst
 
@@ -366,7 +370,7 @@ with c_env2: delivery_mode = st.toggle("📦 배달 패널티 활성화", value=
 
 if "strategy_results" not in st.session_state: st.session_state.strategy_results = None
 if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", type="primary", use_container_width=True):
-    reset_global_seeds() # 버튼 클릭 시 시드 강제 초기화
+    reset_global_seeds()
     progress_bar, status_text = st.progress(0), st.empty()
     avg_res_f = int(idx_1f + (max_f - 1) * 0.7)
     scenarios = {"1층 ⬆️ 거주층": (idx_1f, avg_res_f, lim_1f_up), "거주층 ⬇️ 1층": (avg_res_f, idx_1f, lim_res_1f), "주차장 ⬆️ 거주층": (0, avg_res_f, lim_p_up), "거주층 ⬇️ 주차장": (avg_res_f, 0, lim_res_p)}
@@ -435,7 +439,6 @@ if st.session_state.strategy_results:
     is_worst_wait = (agg["평균 대기시간"] == max_wait_val)
     agg.loc[is_worst_wait, "Final Score"] = 0.0
     
-    # [수정] Stable Sort 적용: 점수가 같을 경우 이름순으로 고정하여 순위 변동 방지
     best = agg.sort_values(["Final Score", "운영 전략"], ascending=[False, True]).iloc[0]
     st.write("### 🏆 종합 KPI 스코어 및 시간대 추천 엔진")
     col1, col2 = st.columns([1.5, 1])
