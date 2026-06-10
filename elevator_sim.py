@@ -8,7 +8,7 @@ from copy import deepcopy
 
 # ----------------- [0] 완전 재현성을 위한 글로벌 시드 설정 -----------------
 GLOBAL_SEED = 42
-MONTE_CARLO_RUNS = 100  # 기본 Monte Carlo 반복 횟수 (사이드바에서 덮어씀)
+MONTE_CARLO_RUNS = 100 
 
 random.seed(GLOBAL_SEED)
 np.random.seed(GLOBAL_SEED)
@@ -26,8 +26,8 @@ st.markdown("""
 > * **Queue 지표 추가:** 모든 운영 전략별로 평균 대기시간, 최대 대기시간, 평균 Queue 길이를 산출합니다.
 > * **표준 물리 참조 및 회생제동 모델:** 기어리스 동기모터(Efficiency 85%) 및 KEPCO 요금제 기준.
 > * **몬테카를로 시뮬레이션 & 통계 분석 (안정화):** 각 시나리오별 동일한 트래픽 샘플을 모든 전략이 공유하며, 고정된 랜덤 시드 스트림(GLOBAL_SEED + mc_index) 기반으로 완벽히 재현 가능한 평균, 표준편차, 95% 신뢰구간 및 지표를 산출합니다.
-> * **종합 KPI 스코어링 (개편 수식):** $Score = 0.40 \\times SLA + 0.25 \\times Wait\\_Score + 0.20 \\times Queue\\_Score + 0.15 \\times ESG\\_Score$의 정규화를 통한 100점 만점 변별력 평가.
-> * **통계 신뢰성:** Monte Carlo 100회 평균값 기반 KPI 계산, 표준편차 및 신뢰구간 함께 표시.
+> * **종합 KPI 스코어링 (안정화 수식):** $Score = 0.35 \\times SLA + 0.25 \\times Wait + 0.15 \\times Queue + 0.15 \\times Energy + 0.10 \\times Carbon$의 정규화 평가.
+> * **통계적 유의성:** 전략 간 점수 차이가 3% 미만일 경우 통계적으로 동등한 성능으로 간주하여 공동 추천합니다.
 """)
 
 # ----------------- [2] SIDEBAR: 설정 변수 -----------------
@@ -193,7 +193,6 @@ def format_el_placements(placements):
     return ", ".join([f"EL {chr(65 + i)}:{FLOOR_LABELS[p]}" for i, p in enumerate(placements)])
 
 def is_elev_allowed_by_logic(logic, elev_idx, req_start, start_idx, tot_floors, placements):
-    # 홀짝수층 분리 운행: 담당 구역 외 호출은 절대 배정 금지 (1층은 공통 처리)
     if "홀짝" in logic:
         if req_start != start_idx:
             rel_floor = req_start - start_idx
@@ -215,22 +214,15 @@ def simulate_route_esg_sla_des(
     p_rate, s_floor, households, is_regen_on, p_lambda, h_penalty, start_idx, tot_floors,
     shared_traffic_burst, mode_label, shared_requests=None
 ):
-    """
-    [수정] shared_requests 파라미터 추가:
-    - None이면 기존 방식으로 내부에서 트래픽 생성 (하위 호환)
-    - 리스트가 전달되면 해당 트래픽을 그대로 사용 (전략 간 동일 트래픽 공유)
-    """
     if abs(target_start - target_end) <= s_floor and target_start >= start_idx:
-        return 5.0, 0.001, {"avg_wait_time": 0.0, "max_wait_time": 0.0, "avg_queue_len": 0.0}
+        return 5.0, 0.001, {"avg_wait_time": 0.0, "max_wait_time": 0.0, "avg_queue_len": 0.0, "all_passenger_avg_time": 5.0}
 
     pure_dwell = max(0.0, base_t - fixed_t)
     door_eff_t = fixed_t + (pure_dwell * (1 - (eff / 100)))
 
     if shared_requests is not None:
-        # [핵심 수정] 전달된 공유 트래픽 사용 (전략 간 동일 조건 보장)
         requests = deepcopy(shared_requests)
     else:
-        # 기존 방식: 내부에서 트래픽 생성 (하위 호환용)
         num_bg = int(shared_traffic_burst * 5)
         requests = []
         for i in range(num_bg):
@@ -247,8 +239,6 @@ def simulate_route_esg_sla_des(
 
     target_time, target_kwh = 0.0, 0.0
     wait_times, queue_lengths, active_finish_times = [], [], []
-
-    # [추가] 전체 승객 SLA 추적용 리스트
     all_passenger_times = []
 
     for req in requests:
@@ -264,7 +254,6 @@ def simulate_route_esg_sla_des(
             t_start = max(el["t_free"], req["t_sp"])
             curr_pos = el["curr_f"]
 
-            # 베이스 스테이션 집중: 호출이 없어 유휴 상태였다면 이미 1층 로비로 이동해 대기 중임
             if "베이스 스테이션" in logic and el["t_free"] < req["t_sp"]:
                 curr_pos = float(start_idx)
 
@@ -276,7 +265,6 @@ def simulate_route_esg_sla_des(
             if req["start"] < start_idx or req["end"] < start_idx:
                 t_arr -= (p_rate / 100) * 1.0
 
-            # 고층부/저층부 분할배치 패널티 구현 (담당 구역 외 호출 배정 시 +40초 패널티 지연)
             if "분할" in logic:
                 mid_f = (tot_floors + start_idx) // 2
                 is_high_req = (req["start"] > mid_f)
@@ -284,15 +272,14 @@ def simulate_route_esg_sla_des(
                 if is_high_req != is_high_el:
                     t_arr += 40.0
 
-            # AI 자동 최적화: 시간대 수요 기반 실시간 기동 가중치 보정
             if "AI 자동 최적화" in logic:
                 mid_f = (tot_floors + start_idx) // 2
                 if mode_label == "출근 시간" and curr_pos > mid_f:
-                    t_arr -= 8.0  # 고층 주거층 하행 가중치 우대
+                    t_arr -= 8.0
                 elif mode_label == "퇴근 시간" and curr_pos <= start_idx:
-                    t_arr -= 8.0  # 로비층 상행 기동 가중치 우대
+                    t_arr -= 8.0
                 elif mode_label == "저녁 시간" and start_idx < curr_pos <= mid_f:
-                    t_arr -= 5.0  # 중간층 분산 정차 유도 우대
+                    t_arr -= 5.0
 
             if t_arr < min_arrive_t:
                 min_arrive_t = t_arr
@@ -301,7 +288,6 @@ def simulate_route_esg_sla_des(
         if best_el is None:
             best_el = elevs[0]
 
-        # 베이스 스테이션 집중 전략에 따른 유휴 귀환 복귀 물리 시간/에너지 소모 강제 반영
         if "베이스 스테이션" in logic and best_el["t_free"] < req["t_sp"]:
             dist_return = abs(best_el["curr_f"] - start_idx) * floor_height
             time_return = get_phys_time(dist_return, max_velocity, acceleration)
@@ -325,7 +311,6 @@ def simulate_route_esg_sla_des(
         t_drop = t_board + move2_t
         t_finish = t_drop + d_eff
 
-        # [추가] 전체 승객 소요시간 추적
         passenger_trip_time = t_finish - req["t_sp"]
         all_passenger_times.append(passenger_trip_time)
 
@@ -361,7 +346,6 @@ def simulate_route_esg_sla_des(
         "avg_wait_time": float(np.mean(wait_times)) if wait_times else 0.0,
         "max_wait_time": float(np.max(wait_times)) if wait_times else 0.0,
         "avg_queue_len": float(np.mean(queue_lengths)) if queue_lengths else 0.0,
-        # [추가] 전체 승객 평균 소요시간 (KPI 왜곡 방지용)
         "all_passenger_avg_time": float(np.mean(all_passenger_times)) if all_passenger_times else target_time
     }
     return target_time, target_kwh, queue_metrics
@@ -453,11 +437,6 @@ def generate_demand_profile(m_label, samples=5000):
 # ----------------- [핵심 추가] 공유 트래픽 샘플 생성 함수 -----------------
 def generate_shared_traffic_sample(mc_seed, target_start, target_end, p_lambda, mode_label_param,
                                     start_idx, tot_floors, p_rate, s_floor):
-    """
-    [핵심 수정] 각 Monte Carlo 반복(mc)마다 단 1회만 호출되어,
-    해당 mc 회차의 트래픽 샘플을 생성한다.
-    이 샘플을 모든 전략이 공유함으로써 전략 간 공정한 비교를 보장한다.
-    """
     np.random.seed(mc_seed)
     random.seed(mc_seed)
 
@@ -518,7 +497,6 @@ top_demand_floors = np.argsort(demand_counts)[-num_elevators:]
 advanced_ai_pos = sorted([int(f) for f in top_demand_floors])
 strategies_config["AI 자동 최적화"] = {"placements": advanced_ai_pos, "logic": "AI 자동 최적화", "desc": f"수요 히트맵 가중치 기반 지능형 밀집 구역 최적 배치"}
 
-# --- AI Generated Strategy #1~#5 완벽 격리 구조적 확산 아키텍처 매핑 ---
 strategies_config["AI Generated Strategy #1 (로비 집중형)"] = {"placements": [idx_1f] * num_elevators, "logic": "자유 운행", "desc": "로비 밀집 집중 구조"}
 strategies_config["AI Generated Strategy #2 (저층 분산형)"] = {"placements": [int(x) for x in np.linspace(idx_1f, mid_idx, num_elevators)], "logic": "자유 운행", "desc": "하방 저층 구역 분산 배치 아키텍처"}
 strategies_config["AI Generated Strategy #3 (중층 집중형)"] = {"placements": [mid_idx] * num_elevators, "logic": "자유 운행", "desc": "건물 기하학적 중심부 밀집 배치"}
@@ -565,22 +543,15 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
         "거주층 ⬇️ 주차장": (avg_res_f, 0, lim_res_p)
     }
 
-    # [핵심 수정] Monte Carlo 시드 배열 사전 생성 (GLOBAL_SEED + mc_index 방식)
     mc_seeds = [GLOBAL_SEED + it for it in range(int(mc_iterations))]
 
     raw_stats = []
     mean_matrix_results = []
 
-    # [핵심 수정] 진행률 계산: 시나리오 × MC 횟수 (전략은 공유 트래픽으로 처리)
     total_steps = len(scenarios) * int(mc_iterations)
     current_step = 0
 
     for s_name, (start, end, target_sla) in scenarios.items():
-
-        # ----------------------------------------------------------------
-        # [핵심 수정 1] 시나리오별 Monte Carlo 공유 트래픽 샘플 사전 생성
-        # 각 mc 회차마다 단 1번 트래픽을 생성하고, 모든 전략이 이를 공유
-        # ----------------------------------------------------------------
         scenario_shared_samples = []
         for mc_idx in range(int(mc_iterations)):
             mc_seed = mc_seeds[mc_idx]
@@ -590,27 +561,19 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
             )
             scenario_shared_samples.append(shared_reqs)
 
-        # ----------------------------------------------------------------
-        # [핵심 수정 2] 각 전략은 동일한 공유 트래픽으로 평가
-        # ----------------------------------------------------------------
         for strat_name, config in strategies_config.items():
-
             eff_param = button_efficiency if strat_name != "전략 미적용 (랜덤 운행)" else 0
             p_rate_param = parking_usage_rate if strat_name != "전략 미적용 (랜덤 운행)" else 0
             s_floor_param = stairs_floor if strat_name != "전략 미적용 (랜덤 운행)" else 0
 
             mc_times, mc_kwhs, mc_waits, mc_max_waits, mc_q_lens, mc_slas = [], [], [], [], [], []
-            mc_all_pax_times = []  # [추가] 전체 승객 평균 소요시간
+            mc_all_pax_times = []
 
             for mc_idx in range(int(mc_iterations)):
                 mc_seed = mc_seeds[mc_idx]
-
-                # [핵심 수정 3] 시뮬레이션 내부 랜덤 상태도 시드로 고정
-                # (shared_requests를 사용하므로 트래픽 생성은 이미 고정됨)
                 np.random.seed(mc_seed)
                 random.seed(mc_seed)
 
-                # 공유 트래픽 샘플 사용
                 shared_reqs = scenario_shared_samples[mc_idx]
 
                 calc_time, calc_kwh, queue_metrics = simulate_route_esg_sla_des(
@@ -618,7 +581,7 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
                     eff_param, base_door_time, fixed_door_moving_time, p_rate_param, s_floor_param,
                     households_per_floor, regen_enabled, poisson_lambda, high_floor_penalty,
                     idx_1f, total_fs, None, mode_label,
-                    shared_requests=shared_reqs  # [핵심] 공유 트래픽 전달
+                    shared_requests=shared_reqs
                 )
 
                 mc_times.append(calc_time)
@@ -629,7 +592,6 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
                 mc_all_pax_times.append(queue_metrics["all_passenger_avg_time"])
                 mc_slas.append(100.0 if calc_time <= target_sla else (target_sla / calc_time) * 100)
 
-            # [핵심 수정 4] 모든 KPI 계산은 Monte Carlo 평균값 사용
             mean_time = np.mean(mc_times)
             mean_wait = np.mean(mc_waits)
             mean_max_wait = np.mean(mc_max_waits)
@@ -638,7 +600,6 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
             mean_sla = np.mean(mc_slas)
             mean_all_pax_time = np.mean(mc_all_pax_times)
 
-            # [추가] 통계 신뢰성 지표
             std_time = np.std(mc_times)
             std_sla = np.std(mc_slas)
             std_wait = np.std(mc_waits)
@@ -653,21 +614,19 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
             mean_matrix_results.append({
                 "운영 전략": strat_name, "AI 배치층": placement_text, "동선 시나리오": s_name,
                 "실제 소요시간": mean_time,
-                "전체승객 평균소요시간": mean_all_pax_time,  # [추가]
+                "전체승객 평균소요시간": mean_all_pax_time,
                 "평균 대기시간": mean_wait,
                 "최대 대기시간": mean_max_wait,
                 "평균 Queue 길이": mean_q_len,
                 "목표 SLA": target_sla, "SLA 초과(초)": sla_excess,
                 "SLA 달성률": mean_sla,
                 "전력 소비량(kWh)": mean_kwh, "전기 요금(원)": calc_cost, "탄소 배출량(g)": calc_carbon,
-                # [추가] 통계 신뢰성 지표
                 "MC 횟수": int(mc_iterations),
                 "소요시간 표준편차": std_time,
                 "SLA 표준편차": std_sla,
                 "대기시간 표준편차": std_wait
             })
 
-            # 몬테카를로 연구용 정밀 통계 지표 산출
             raw_stats.append({
                 "운영 전략": strat_name, "시나리오": s_name,
                 "평균 대기시간 (Mean)": mean_wait,
@@ -679,7 +638,6 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
                 "95% 분위수 (P95)": np.percentile(mc_waits, 95)
             })
 
-        # 진행률 업데이트 (시나리오 단위)
         current_step += int(mc_iterations)
         progress_bar.progress(min(current_step / total_steps, 1.0))
         status_text.text(f"🔄 몬테카를로 통계 연산 및 대기열 추적 중... (시나리오: {s_name})")
@@ -702,25 +660,27 @@ if st.session_state.strategy_results is not None:
     saved_strategies_config = st.session_state.strategy_results["strategies_config"]
     saved_regen_enabled = st.session_state.strategy_results["regen_enabled"]
 
-    # 전략별 통합 지표 요약 집계
     strat_agg = df_matrix.groupby("운영 전략").agg({
         "SLA 달성률": "mean",
         "평균 대기시간": "mean",
         "평균 Queue 길이": "mean",
         "전력 소비량(kWh)": "sum",
-        "전체승객 평균소요시간": "mean"  # [추가]
+        "탄소 배출량(g)": "sum",
+        "전체승객 평균소요시간": "mean"
     }).reset_index()
 
     base_row = strat_agg[strat_agg["운영 전략"] == "전략 미적용 (랜덤 운행)"].iloc[0]
 
-    # --- [수정] 개편된 KPI 점수식 및 상대 정규화 100점 만점 환산 스케일러 구현 ---
-    # [핵심 수정 5] 모든 KPI 입력값은 Monte Carlo 평균값 (mean_matrix_results에서 집계된 값)
+    max_sla = strat_agg["SLA 달성률"].max()
+    min_sla = strat_agg["SLA 달성률"].min()
     max_w = strat_agg["평균 대기시간"].max()
     min_w = strat_agg["평균 대기시간"].min()
     max_q = strat_agg["평균 Queue 길이"].max()
     min_q = strat_agg["평균 Queue 길이"].min()
     max_e = strat_agg["전력 소비량(kWh)"].max()
     min_e = strat_agg["전력 소비량(kWh)"].min()
+    max_c = strat_agg["탄소 배출량(g)"].max()
+    min_c = strat_agg["탄소 배출량(g)"].min()
     eps = 1e-6
 
     kpi_results = []
@@ -730,26 +690,25 @@ if st.session_state.strategy_results is not None:
         w_val = row["평균 대기시간"]
         q_val = row["평균 Queue 길이"]
         e_val = row["전력 소비량(kWh)"]
+        c_val = row["탄소 배출량(g)"]
 
-        # 지표별 역전 분할 선형 정규화 스케일링 (0 ~ 100점 분할 매핑)
-        sla_score = sla_val
+        sla_score = 100.0 * (sla_val - min_sla) / (max_sla - min_sla + eps) if max_sla != min_sla else 100.0
         wait_score = 100.0 * (max_w - w_val) / (max_w - min_w + eps) if max_w != min_w else 100.0
         queue_score = 100.0 * (max_q - q_val) / (max_q - min_q + eps) if max_q != min_q else 100.0
-        esg_score = 100.0 * (max_e - e_val) / (max_e - min_e + eps) if max_e != min_e else 100.0
+        energy_score = 100.0 * (max_e - e_val) / (max_e - min_e + eps) if max_e != min_e else 100.0
+        carbon_score = 100.0 * (max_c - c_val) / (max_c - min_c + eps) if max_c != min_c else 100.0
 
-        # 가중치 결합: 40% SLA + 25% 평균대기시간 + 20% Queue + 15% ESG
-        final_score = (0.40 * sla_score) + (0.25 * wait_score) + (0.20 * queue_score) + (0.15 * esg_score)
+        final_score = (0.35 * sla_score) + (0.25 * wait_score) + (0.15 * queue_score) + (0.15 * energy_score) + (0.10 * carbon_score)
 
         wait_imp = (base_row["평균 대기시간"] - w_val) / base_row["평균 대기시간"] * 100 if base_row["평균 대기시간"] > 0 else 0
         q_imp = (base_row["평균 Queue 길이"] - q_val) / base_row["평균 Queue 길이"] * 100 if base_row["평균 Queue 길이"] > 0 else 0
-        esg_imp = (base_row["전력 소비량(kWh)"] - e_val) / base_row["전력 소비량(kWh)"] * 100 if base_row["전력 소비량(kWh)"] > 0 else 0
+        e_imp = (base_row["전력 소비량(kWh)"] - e_val) / base_row["전력 소비량(kWh)"] * 100 if base_row["전력 소비량(kWh)"] > 0 else 0
 
-        # [추가] 통계 신뢰성 지표 집계
         strat_df_sub = df_matrix[df_matrix["운영 전략"] == strat]
-        mc_count_val = int(strat_df_sub["MC 횟수"].mean()) if "MC 횟수" in strat_df_sub.columns else int(mc_iterations)
-        std_sla_val = float(strat_df_sub["SLA 표준편차"].mean()) if "SLA 표준편차" in strat_df_sub.columns else 0.0
-        std_wait_val = float(strat_df_sub["대기시간 표준편차"].mean()) if "대기시간 표준편차" in strat_df_sub.columns else 0.0
-        std_kpi_val = float(strat_df_sub["소요시간 표준편차"].mean()) if "소요시간 표준편차" in strat_df_sub.columns else 0.0
+        mc_count_val = int(strat_df_sub["MC 횟수"].mean())
+        std_wait_val = float(strat_df_sub["대기시간 표준편차"].mean())
+        std_sla_val = float(strat_df_sub["SLA 표준편차"].mean())
+        std_time_val = float(strat_df_sub["소요시간 표준편차"].mean())
 
         kpi_results.append({
             "운영 전략": strat,
@@ -757,33 +716,33 @@ if st.session_state.strategy_results is not None:
             "SLA 평균": sla_val,
             "대기시간 개선율(%)": wait_imp,
             "Queue 개선율(%)": q_imp,
-            "ESG 개선율(%)": esg_imp,
-            # [추가] 통계 신뢰성 컬럼
+            "Energy 개선율(%)": e_imp,
             "MC 횟수": mc_count_val,
-            "KPI 표준편차": std_kpi_val,
+            "KPI 표준편차": std_time_val,
             "SLA 표준편차": std_sla_val,
-            "대기시간 표준편차": std_wait_val
+            "대기시간 표준편차": std_wait_val,
+            "95% 신뢰구간": 1.96 * (std_wait_val / np.sqrt(mc_count_val))
         })
 
     df_kpi = pd.DataFrame(kpi_results).sort_values("Final Score", ascending=False).reset_index(drop=True)
+    
+    max_score = df_kpi.iloc[0]["Final Score"]
+    recommended_strats = df_kpi[df_kpi["Final Score"] >= max_score * 0.97]
     best_strat_name = df_kpi.iloc[0]["운영 전략"]
     best_strat_metrics = df_kpi.iloc[0]
 
-    # --- Section: Recommendation Engine & Conclusion ---
     st.write("### 🏆 종합 KPI 스코어 및 시간대 추천 엔진")
     col1, col2 = st.columns([1.5, 1])
 
     with col1:
-        # [수정] 통계 신뢰성 컬럼 포함하여 표시
-        display_cols = ["운영 전략", "Final Score", "SLA 평균", "대기시간 개선율(%)", "Queue 개선율(%)", "ESG 개선율(%)", "MC 횟수", "KPI 표준편차", "SLA 표준편차", "대기시간 표준편차"]
-        df_kpi_display = df_kpi[display_cols]
+        display_cols = ["운영 전략", "Final Score", "SLA 평균", "대기시간 개선율(%)", "Queue 개선율(%)", "Energy 개선율(%)", "MC 횟수", "KPI 표준편차", "SLA 표준편차", "대기시간 표준편차"]
         st.dataframe(
-            df_kpi_display.style.format({
+            df_kpi[display_cols].style.format({
                 "Final Score": "{:.2f}점",
                 "SLA 평균": "{:.1f}%",
                 "대기시간 개선율(%)": "{:+.1f}%",
                 "Queue 개선율(%)": "{:+.1f}%",
-                "ESG 개선율(%)": "{:+.1f}%",
+                "Energy 개선율(%)": "{:+.1f}%",
                 "MC 횟수": "{:d}회",
                 "KPI 표준편차": "{:.2f}",
                 "SLA 표준편차": "{:.2f}",
@@ -793,43 +752,45 @@ if st.session_state.strategy_results is not None:
         )
 
     with col2:
-        rec_placement = saved_strategies_config[best_strat_name]['placements']
-        if "홀짝" in saved_strategies_config[best_strat_name]['logic'] or "분할" in saved_strategies_config[best_strat_name]['logic']:
-            rec_pl_text = "동적 권역 필터링 및 할당 로직 적용"
-        else:
-            rec_pl_text = ", ".join([f"EL-{chr(65+i)} = {FLOOR_LABELS[p]}" for i, p in enumerate(rec_placement)])
-
+        rec_names = ", ".join(recommended_strats["운영 전략"].tolist())
+        is_plural = len(recommended_strats) > 1
+        rec_msg = "통계적으로 동등한 최적 전략들" if is_plural else "단독 최적 전략"
+        
         st.success(f"""
-        **💡 {saved_mode_label} 최적화 추천 리포트**
-        * **최적 전략**: {best_strat_name}
-        * **인프라 배치 매핑**: {rec_pl_text}
+        **💡 {saved_mode_label} 최적화 추천 리포트 ({rec_msg})**
+        * **추천 전략**: {rec_names}
         * **기대 SLA 만족률**: {best_strat_metrics['SLA 평균']:.1f}%
         * **기대 평균 대기시간**: {strat_agg[strat_agg['운영 전략'] == best_strat_name]['평균 대기시간'].values[0]:.1f}초
         * **MC 반복 횟수**: {best_strat_metrics['MC 횟수']}회 (통계 안정화 보장)
         """)
+        
+        user_score = df_kpi[df_kpi["운영 전략"] == "사용자 수동 배치"]["Final Score"].values[0]
+        ai_scores = df_kpi[df_kpi["운영 전략"].str.contains("AI|전략") & (df_kpi["운영 전략"] != "사용자 수동 배치")]["Final Score"]
+        max_ai_score = ai_scores.max()
+        
+        if user_score > max_ai_score:
+            st.info("🏅 **사용자 배치 우세**: 연구원의 수동 배치가 AI 최적화 전략보다 높은 KPI를 달성했습니다.")
+        else:
+            st.info("🤖 **AI 배치 우세**: 시스템의 AI 자동 최적화 전략이 사용자 배치보다 높은 효율을 보입니다.")
 
     st.write("### 📝 논문용 결론 자동 생성 (Auto Conclusion)")
     st.info(f"""
     본 시뮬레이션 환경 분석 결과, **{saved_mode_label}** 시나리오 조건 하에서 **{best_strat_name}** 전략이 종합 가중 정규화 스코어 **{best_strat_metrics['Final Score']:.2f}점**을 기록하며 최우수 운영 정책으로 도출되었다. 
     해당 정책을 채택할 경우 기존 기초 랜덤 배치 운행 방식 대비 평균 대기시간을 **{best_strat_metrics['대기시간 개선율(%)']:.1f}%** 단축하는 효과를 거둘 수 있으며, 수송 적체 수준을 나타내는 Queue 평균 길이는 **{best_strat_metrics['Queue 개선율(%)']:.1f}%** 개선된다. 
-    동시에, 빌딩의 친환경 탄소 절감 부하 관점에서도 에너지 소모량을 **{best_strat_metrics['ESG 개선율(%)']:.1f}%** 절감함으로써 빌딩 환경 관리 지표 최적화에 기여함을 확인하였다.
+    동시에, 빌딩의 친환경 탄소 절감 부하 관점에서도 에너지 소모량을 **{best_strat_metrics['Energy 개선율(%)']:.1f}%** 절감함으로써 빌딩 환경 관리 지표 최적화에 기여함을 확인하였다.
     본 결과는 Monte Carlo {best_strat_metrics['MC 횟수']}회 반복 평균 기반으로 산출되어 통계적 안정성이 보장된다 (KPI 표준편차: {best_strat_metrics['KPI 표준편차']:.2f}).
     """)
 
     st.divider()
 
-    # --- Section: Bottleneck Analysis ---
     st.write("### 🚨 시스템 병목 분석 리포트")
     bottlenecks = []
     base_agg = strat_agg[strat_agg["운영 전략"] == "전략 미적용 (랜덤 운행)"].iloc[0]
-
     if base_agg["평균 Queue 길이"] > 4.0:
         bottlenecks.append("⚠️ **Queue 과도 증가 리스크**: 트래픽 유입 빈도가 유휴 처리 용량을 초과하여 대기열 누적 현상이 관측됩니다.")
-
     df_raw_base = df_matrix[df_matrix["운영 전략"] == "전략 미적용 (랜덤 운행)"]
     if df_raw_base["최대 대기시간"].max() > 100:
         bottlenecks.append("⚠️ **장기 기동 지연 분산**: 특정 원거리 구간 동선에서 최악 대기 시간이 100초를 초과하는 전력 병목이 발생했습니다.")
-
     if not bottlenecks:
         st.success("✅ 심각한 수송 병목 현상이 발견되지 않았습니다. 현재 가용 인프라 구성으로 안정적인 수송 궤도를 유지합니다.")
     else:
@@ -838,14 +799,12 @@ if st.session_state.strategy_results is not None:
 
     st.divider()
 
-    # --- Section: Deep Research Stats ---
     st.write("### 🔬 연구용 상세 통계 지표 (몬테카를로 N회 반복 결과)")
     with st.expander("통계 데이터 테이블 펼쳐보기"):
         st.dataframe(df_stats.style.format(precision=2), use_container_width=True)
 
     st.divider()
 
-    # --- Queue 지표 요약 ---
     queue_summary = df_matrix.groupby("운영 전략").agg({
         "평균 대기시간": "mean", "최대 대기시간": "max", "평균 Queue 길이": "mean"
     }).reset_index()
@@ -859,21 +818,17 @@ if st.session_state.strategy_results is not None:
     for strat_name in saved_strategies_config.keys():
         strat_df = df_matrix[df_matrix["운영 전략"] == strat_name]
         row_data = {"운영 전략": strat_name, "AI 배치층": strat_df["AI 배치층"].iloc[0]}
-
         for _, row in strat_df.iterrows():
             scen = row["동선 시나리오"]
             time_v = row["실제 소요시간"]
             pass_v = row["SLA 달성률"]
             excess_v = row["SLA 초과(초)"]
-
             base_time = df_matrix[(df_matrix["운영 전략"] == "전략 미적용 (랜덤 운행)") & (df_matrix["동선 시나리오"] == scen)]["실제 소요시간"].values[0]
             time_diff_pct = ((time_v - base_time) / base_time) * 100
             pct_str = f"({time_diff_pct:+.1f}%)" if strat_name != "전략 미적용 (랜덤 운행)" else "(기준)"
             status_icon = "⭕" if pass_v >= 100.0 else f"❌ (+{excess_v:.1f}초)"
-
             row_data[f"{scen} (소요시간)"] = f"{time_v:.1f}초 {pct_str}"
             row_data[f"{scen} (달성률)"] = f"{pass_v:.1f}% ({status_icon})"
-
         final_rows.append(row_data)
 
     df_pivot = pd.DataFrame(final_rows).set_index("운영 전략")
@@ -882,49 +837,39 @@ if st.session_state.strategy_results is not None:
 
     st.divider()
 
-    # --- DES 타임라인 모니터 ---
     st.write("### 📊 DES 이벤트 타임라인 시각화 모니터")
     strategy_options = list(saved_strategies_config.keys())
     best_idx = strategy_options.index(best_strat_name) if best_strat_name in strategy_options else 0
-
     selected_strategy = st.selectbox("DES 타임라인에 적용할 전략 선택", options=strategy_options, index=best_idx)
     selected_config = saved_strategies_config[selected_strategy]
-
     selected_placement_text = "-" if "특수 로직" in selected_config["logic"] else format_placements(selected_config["placements"])
     timeline_df = build_strategy_timeline(selected_config, saved_mode_label)
-
     st.markdown(f"#### DES 이벤트 타임라인<br>(전략: {selected_strategy} / 배치층: {selected_placement_text} / 시간대: {saved_mode_label})", unsafe_allow_html=True)
     st.dataframe(timeline_df, use_container_width=True)
 
     st.divider()
 
-    # --- ESG 친환경 부하 분석 ---
     st.write("### 🌿 [ESG 친환경 부하 분석] 전략별 누적 에너지 및 탄소 배출 비교")
     df_esg_summary = df_matrix.groupby("운영 전략").agg({"전력 소비량(kWh)": "sum", "전기 요금(원)": "sum", "탄소 배출량(g)": "sum"}).reset_index()
     base_row_esg = df_esg_summary[df_esg_summary["운영 전략"] == "전략 미적용 (랜덤 운행)"].iloc[0]
-
     esg_rows = []
     for _, row in df_esg_summary.iterrows():
         strat, kwh_v, cost_v, co2_v = row["운영 전략"], row["전력 소비량(kWh)"], row["전기 요금(원)"], row["탄소 배출량(g)"]
         kwh_diff_pct = ((kwh_v - base_row_esg["전력 소비량(kWh)"]) / base_row_esg["전력 소비량(kWh)"]) * 100 if base_row_esg["전력 소비량(kWh)"] != 0 else 0
         cost_diff_pct = ((cost_v - base_row_esg["전기 요금(원)"]) / base_row_esg["전기 요금(원)"]) * 100 if base_row_esg["전기 요금(원)"] != 0 else 0
         co2_diff_pct = ((co2_v - base_row_esg["탄소 배출량(g)"]) / base_row_esg["탄소 배출량(g)"]) * 100 if base_row_esg["탄소 배출량(g)"] != 0 else 0
-
         esg_rows.append({
             "운영 전략": strat,
             "총 전력 소비량": f"{kwh_v:.4f} kWh ({kwh_diff_pct:+.1f}%)" if strat != "전략 미적용 (랜덤 운행)" else f"{kwh_v:.4f} kWh (기준)",
             "총 예상 전기요금": f"{cost_v:.1f} 원 ({cost_diff_pct:+.1f}%)" if strat != "전략 미적용 (랜덤 운행)" else f"{cost_v:.1f} 원 (기준)",
             "누적 탄소 배출 발자국": f"{co2_v:.1f} g CO₂ ({co2_diff_pct:+.1f}%)" if strat != "전략 미적용 (랜덤 운행)" else f"{co2_v:.1f} g CO₂ (기준)"
         })
-
     st.dataframe(pd.DataFrame(esg_rows).set_index("운영 전략"), use_container_width=True)
 
     st.divider()
 
-    # --- 차트 플롯 분석 시각화 ---
     st.write("### 📊 전략 평가 핵심 데이터 시각화 분석")
     g_col1, g_col2 = st.columns(2)
-
     with g_col1:
         st.write("##### ⏳ [동선별] 실제 소요 시간 전략별 비교")
         time_chart = alt.Chart(df_matrix).mark_bar().encode(
@@ -934,7 +879,6 @@ if st.session_state.strategy_results is not None:
             column=alt.Column("동선 시나리오:N", title="시나리오 동선 구간")
         ).properties(width=110, height=300)
         st.altair_chart(time_chart)
-
     with g_col2:
         st.write("##### ⚡ [에너지] 전략별 총 전력 소비량(kWh) 대조 그래프")
         energy_chart = alt.Chart(df_esg_summary).mark_bar().encode(
