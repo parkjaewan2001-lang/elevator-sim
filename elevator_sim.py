@@ -339,7 +339,7 @@ strategies_config["고층부/저층부 분할배치"] = {"placements": [int(idx_
 strategies_config["베이스 스테이션 집중"] = {"placements": [p_base] * num_elevators, "logic": "베이스 스테이션 집중", "desc": "무조건 로비/지하 복귀"}
 strategies_config["동적 간격 배치"] = {"placements": [int(f) for f in np.linspace(0, total_fs - 1, num_elevators)], "logic": "동적 간격", "desc": "전체 층수 등간격 분산"}
 strategies_config["AI 자동 최적화"] = {"placements": sorted([int(f) for f in top_demand_floors]), "logic": "AI 자동 최적화", "desc": "수요 히트맵 기반 최적 배치"}
-strategies_config["AI Generated Strategy #1 (출발층 집중형)"] = {"placements": [p_base] * num_elevators, "logic": "자유 운행", "desc": "로비/지하 밀집"}
+strategies_config["AI Generated Strategy #1 (로비/지하 집중형)"] = {"placements": [p_base] * num_elevators, "logic": "자유 운행", "desc": "로비/지하 밀집"}
 strategies_config["AI Generated Strategy #2 (하방 분산형)"] = {"placements": [int(x) for x in np.linspace(p_base, mid_idx, num_elevators)], "logic": "자유 운행", "desc": "하방 저층 분산"}
 strategies_config["AI Generated Strategy #3 (중층 집중형)"] = {"placements": [mid_idx] * num_elevators, "logic": "자유 운행", "desc": "중심부 밀집"}
 strategies_config["AI Generated Strategy #4 (고층 집중형)"] = {"placements": [int(x) for x in np.linspace(mid_idx, total_fs - 1, num_elevators)], "logic": "자유 운행", "desc": "상방 고층 집중"}
@@ -364,15 +364,16 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
     progress_bar, status_text = st.progress(0), st.empty()
     avg_res_f = int(idx_1f + (max_f - 1) * 0.7)
     scenarios = {"1층 ⬆️ 거주층": (idx_1f, avg_res_f, lim_1f_up), "거주층 ⬇️ 1층": (avg_res_f, idx_1f, lim_res_1f), "주차장 ⬆️ 거주층": (0, avg_res_f, lim_p_up), "거주층 ⬇️ 주차장": (avg_res_f, 0, lim_res_p)}
-    mc_seeds = [GLOBAL_SEED + it for it in range(int(mc_iterations))]
+    mc_iterations_val = int(mc_iterations)
+    mc_seeds = [GLOBAL_SEED + it for it in range(mc_iterations_val)]
     mean_matrix_results = []
-    total_steps, current_step = len(scenarios) * int(mc_iterations), 0
+    total_steps, current_step = len(scenarios) * mc_iterations_val, 0
 
     for s_name, (start, end, target_sla) in scenarios.items():
         shared_samples = [generate_shared_traffic_sample(s, start, end, poisson_lambda, mode_label, idx_1f, total_fs, parking_usage_rate, stairs_floor)[0] for s in mc_seeds]
         for strat_name, config in strategies_config.items():
             mc_data = []
-            for mc_idx in range(int(mc_iterations)):
+            for mc_idx in range(mc_iterations_val):
                 np.random.seed(mc_seeds[mc_idx]); random.seed(mc_seeds[mc_idx])
                 res = simulate_route_esg_sla_des(start, end, config["placements"], config["logic"], congestion, delivery_mode, button_efficiency, base_door_time, fixed_door_moving_time, parking_usage_rate, stairs_floor, households_per_floor, regen_enabled, poisson_lambda, high_floor_penalty, idx_1f, total_fs, None, mode_label, shared_requests=shared_samples[mc_idx])
                 mc_data.append({"time": res[0], "kwh": res[1], "wait": res[2]["avg_wait_time"], "q": res[2]["avg_queue_len"], "sla": 100.0 if res[0] <= target_sla else (target_sla / res[0]) * 100})
@@ -388,7 +389,7 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
             elif mode_label == "퇴근 시간":
                 target_f = 0 if parking_usage_rate > 50 else idx_1f
                 fitness = 100.0 if any(abs(p - target_f) <= 1 for p in ps) else 0.0
-                if strat_name == "홀짝수층 분리 운행": fitness = 0.0 # 주차장 대응 불가 시 0점 강제
+                if strat_name == "홀짝수층 분리 운행": fitness = 0.0 
             elif mode_label == "낮 시간": fitness = 100.0 if any(abs(p - mid_idx) < 5 for p in ps) else 50.0
             elif mode_label == "저녁 시간": fitness = 100.0 if any(idx_1f <= p <= mid_idx for p in ps) else 40.0
             elif mode_label == "새벽 시간": fitness = 100.0 if any(p < idx_1f + 2 for p in ps) else 40.0
@@ -396,7 +397,7 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
             placement_display = "" if strat_name in ["전략 미적용 (랜덤 운행)", "홀짝수층 분리 운행"] else format_el_placements(config["placements"])
             mean_matrix_results.append({"운영 전략": strat_name, "AI 배치층": placement_display, "동선 시나리오": s_name, "실제 소요시간": m_time, "평균 대기시간": m_wait, "평균 Queue 길이": m_q, "SLA 달성률": m_sla, "전력 소비량(kWh)": m_kwh, "전기 요금(원)": m_kwh * kepco_rate, "탄소 배출량(g)": m_kwh * 424.0, "Fitness": fitness, "Std": std_time})
 
-        current_step += int(mc_iterations)
+        current_step += mc_iterations_val
         progress_bar.progress(min(current_step / total_steps, 1.0))
         status_text.text(f"🔄 몬테카를로 연산 중... ({s_name})")
     
@@ -418,18 +419,14 @@ if st.session_state.strategy_results:
         "Std": "mean"
     }).reset_index()
     
-    # [수정] 서비스 품질 가중치 압도적 강화
     for c in ["SLA 달성률", "Fitness"]: agg[c+"_s"] = (agg[c] - agg[c].min()) / (agg[c].max() - agg[c].min() + 1e-6) * 100
     for c in ["평균 대기시간", "평균 Queue 길이", "전력 소비량(kWh)", "탄소 배출량(g)", "Std"]: agg[c+"_s"] = (agg[c].max() - agg[c]) / (agg[c].max() - agg[c].min() + 1e-6) * 100
     
-    # [수정] 가중치: SLA(40%) + Wait(30%) = 서비스 품질 70% 반영
     agg["Final Score"] = 0.40*agg["SLA 달성률_s"] + 0.30*agg["평균 대기시간_s"] + 0.10*agg["평균 Queue 길이_s"] + 0.05*agg["전력 소비량(kWh)_s"] + 0.05*agg["탄소 배출량(g)_s"] + 0.10*agg["Fitness_s"]
     agg["Final Score"] += agg["Std_s"] * 0.05
     
-    # [수정] 대기시간 최악 전략 추천 배제 로직
     max_wait_val = agg["평균 대기시간"].max()
     is_worst_wait = (agg["평균 대기시간"] == max_wait_val)
-    # 최악 대기시간 전략은 점수를 0점으로 강제 삭감하여 추천 배제
     agg.loc[is_worst_wait, "Final Score"] = 0.0
     
     best = agg.sort_values("Final Score", ascending=False).iloc[0]
@@ -444,17 +441,24 @@ if st.session_state.strategy_results:
     with col2:
         st.success(f"**최적 전략: {best['운영 전략']}**\n* KPI: {best['Final Score']:.2f}\n* SLA: {best['SLA 달성률']:.1f}%\n* 대기시간: {best['평균 대기시간']:.1f}초\n* Fitness: {best['Fitness']:.1f}")
         
-        ps_best = strategies_config[best['운영 전략']]['placements']
-        if saved_mode == "출근 시간" and not any(p > mid_idx for p in ps_best): st.warning("⚠️ 출근 시간 경고: 고층 대기 엘리베이터가 없습니다.")
-        if saved_mode == "퇴근 시간":
-            target_f = 0 if parking_usage_rate > 50 else idx_1f
-            if not any(abs(p - target_f) <= 1 for p in ps_best): st.warning("⚠️ 퇴근 시간 경고: 주요 출발층(지하/로비) 대응 엘리베이터가 없습니다.")
+        # [수정] KeyError 방어 로직 추가 및 명칭 일치 보장
+        target_strat = best['운영 전략']
+        if target_strat in strategies_config:
+            ps_best = strategies_config[target_strat]['placements']
+            if saved_mode == "출근 시간" and not any(p > mid_idx for p in ps_best): st.warning("⚠️ 출근 시간 경고: 고층 대기 엘리베이터가 없습니다.")
+            if saved_mode == "퇴근 시간":
+                target_f = 0 if parking_usage_rate > 50 else idx_1f
+                if not any(abs(p - target_f) <= 1 for p in ps_best): st.warning("⚠️ 퇴근 시간 경고: 주요 출발층(지하/로비) 대응 엘리베이터가 없습니다.")
+        else:
+            st.warning("⚠️ 전략 정보를 불러오는 중 일시적인 오류가 발생했습니다. 다시 시뮬레이션해 주세요.")
 
     st.write("### 📈 전략 비교 매트릭스")
     st.dataframe(df.pivot(index="운영 전략", columns="동선 시나리오", values="실제 소요시간"), use_container_width=True)
     
     st.write("### 📊 DES 이벤트 타임라인 (최적 전략 기준)")
-    st.dataframe(build_strategy_timeline(strategies_config[best['운영 전략']], saved_mode), use_container_width=True)
+    # [수정] KeyError 방어 로직
+    if best['운영 전략'] in strategies_config:
+        st.dataframe(build_strategy_timeline(strategies_config[best['운영 전략']], saved_mode), use_container_width=True)
 
     st.write("### 🌿 ESG 상세 비교 (에너지 비용 및 탄소 발자국)")
     c1, c2 = st.columns(2)
