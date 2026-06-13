@@ -148,11 +148,10 @@ def generate_weighted_trip_by_time(mode_label, start_idx, tot_floors, parking_ra
     return start, end
 
 def generate_multi_drop_floors(start_floor, end_floor, passengers, tot_floors, start_idx):
-    # [신규] 다중 하차 층 생성 로직
     if passengers <= 1: return [end_floor]
     
     drops = set([end_floor])
-    num_stops = min(passengers, random.randint(2, 4)) # 최대 4개 층 정차
+    num_stops = min(passengers, random.randint(2, 4)) 
     
     is_up = end_floor > start_floor
     if is_up:
@@ -270,8 +269,7 @@ def simulate_route_esg_sla_des(
         wait_time = max(0.0, t_arrive - req["t_sp"])
         wait_times.append(wait_time)
         
-        # [수정] 다중 하차 시뮬레이션 로직
-        t_current = t_arrive + d_eff # 탑승 완료 시점
+        t_current = t_arrive + d_eff
         curr_el_pos = req["start"]
         total_passengers = req.get("passengers", 1)
         remaining_passengers = total_passengers
@@ -281,7 +279,6 @@ def simulate_route_esg_sla_des(
             move_t = get_phys_time(dist_move, max_velocity, acceleration)
             t_current += move_t
             
-            # 에너지 계산 (하중 반영)
             mass = 500 + (remaining_passengers * 70)
             e_move = ((mass * 9.8 * max_velocity * move_t) / (0.85 * 3600 * 1000))
             if is_deliv: e_move *= 2.4
@@ -297,10 +294,8 @@ def simulate_route_esg_sla_des(
             
             if req["is_target"]: target_kwh += e_move * rf
             
-            # 하차 처리
             t_current += d_eff
             curr_el_pos = drop_f
-            # 하차 인원 분산 (단순화: 균등 분산)
             dropped = max(1, remaining_passengers // (len(req["ends"]) - i))
             remaining_passengers -= dropped
             
@@ -309,7 +304,6 @@ def simulate_route_esg_sla_des(
         
         if req["is_target"]:
             target_time = t_finish - req["t_sp"]
-            # 타겟 승객 에너지 (첫 이동 포함)
             e_m1 = ((500 * 9.8 * max_velocity * move1_t) / (0.85 * 3600 * 1000))
             rf1 = -0.35 if is_regen_on and req["start"] > best_el["curr_f"] else 1.05
             target_kwh += e_m1 * rf1 + (0.001 * w * (1.8 if is_deliv else 1.0))
@@ -455,17 +449,25 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
             m_time, m_kwh, m_wait, m_q, m_sla = df_mc["time"].mean(), df_mc["kwh"].mean(), df_mc["wait"].mean(), df_mc["q"].mean(), df_mc["sla"].mean()
             std_time = df_mc["time"].std()
 
-            fitness = 0.0
+            # [수정 적용 완료] 최적 층과의 상대적 거리를 계산하여 연속형 소수점 Fitness 부여
             ps = config["placements"]
-            if mode_label == "출근 시간":
-                fitness = 100.0 if any(p > mid_idx for p in ps) else 30.0
-            elif mode_label == "퇴근 시간":
-                target_f = 0 if parking_usage_rate > 50 else idx_1f
-                fitness = 100.0 if any(abs(p - target_f) <= 1 for p in ps) else 0.0
-                if strat_name == "홀짝수층 분리 운행": fitness = 0.0 
-            elif mode_label == "낮 시간": fitness = 100.0 if any(abs(p - mid_idx) < 5 for p in ps) else 50.0
-            elif mode_label == "저녁 시간": fitness = 100.0 if any(idx_1f <= p <= mid_idx for p in ps) else 40.0
-            elif mode_label == "새벽 시간": fitness = 100.0 if any(p < idx_1f + 2 for p in ps) else 40.0
+            fitness_scores = []
+            for p in ps:
+                if mode_label == "출근 시간": optimal = total_fs - 1
+                elif mode_label == "퇴근 시간": optimal = 0 if parking_usage_rate > 50 else idx_1f
+                elif mode_label == "낮 시간": optimal = mid_idx
+                elif mode_label == "저녁 시간": optimal = (idx_1f + mid_idx) // 2
+                elif mode_label == "새벽 시간": optimal = idx_1f
+                else: optimal = mid_idx
+                
+                score = (1.0 - abs(p - optimal) / total_fs) * 100.0
+                fitness_scores.append(score)
+            
+            fitness = sum(fitness_scores) / len(fitness_scores) if fitness_scores else 0.0
+            
+            # 홀짝 운행은 퇴근 시간대 특정 층 쏠림에 취약하므로 패널티 부과 (다양성 확보)
+            if mode_label == "퇴근 시간" and strat_name == "홀짝수층 분리 운행": 
+                fitness *= 0.8 
 
             placement_display = "" if strat_name in ["전략 미적용 (랜덤 운행)", "홀짝수층 분리 운행"] else format_el_placements(config["placements"])
             mean_matrix_results.append({"운영 전략": strat_name, "AI 배치층": placement_display, "동선 시나리오": s_name, "실제 소요시간": m_time, "평균 대기시간": m_wait, "평균 Queue 길이": m_q, "SLA 달성률": m_sla, "전력 소비량(kWh)": m_kwh, "전기 요금(원)": m_kwh * kepco_rate, "탄소 배출량(g)": m_kwh * 424.0, "Fitness": fitness, "Std": std_time})
