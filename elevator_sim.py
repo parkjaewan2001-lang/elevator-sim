@@ -44,7 +44,6 @@ with st.sidebar:
     st.divider()
     st.header("📊 통계적 트래픽 및 층별 가중치")
     poisson_lambda = st.number_input("포아송 분포 λ (분당 호출 집중도)", min_value=1.0, max_value=20.0, value=7.5, step=0.5)
-    high_floor_penalty = st.number_input("고층부 대기 패널티 계수", min_value=1.0, max_value=3.0, value=1.5, step=0.1)
 
     st.divider()
     st.header("🌱 ESG 하드웨어 옵션")
@@ -200,7 +199,7 @@ class ElevatorAgent:
 
 def simulate_route_esg_sla_des(
     target_start, target_end, placements, logic, cong, is_deliv, eff, base_t, fixed_t,
-    p_rate, s_floor, households, is_regen_on, p_lambda, h_penalty, start_idx, tot_floors,
+    p_rate, s_floor, households, is_regen_on, p_lambda, start_idx, tot_floors,
     shared_traffic_burst, mode_label, shared_requests=None
 ):
     if abs(target_start - target_end) <= s_floor and target_start >= start_idx:
@@ -243,7 +242,6 @@ def simulate_route_esg_sla_des(
             if "베이스 스테이션" in logic and el["t_free"] < req["t_sp"]: curr_pos = float(start_idx)
             dist1 = abs(curr_pos - req["start"]) * floor_height
             t_arr = t_start + get_phys_time(dist1, max_velocity, acceleration)
-            if req["start"] > start_idx: t_arr += (req["start"] - start_idx) * h_penalty * 0.2
             if req["start"] < start_idx or req["ends"][-1] < start_idx: t_arr -= (p_rate / 100) * 1.0
             if "분할" in logic:
                 mid_f = (tot_floors + start_idx) // 2
@@ -450,7 +448,7 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
             mc_data = []
             for mc_idx in range(mc_iterations_val):
                 np.random.seed(mc_seeds[mc_idx]); random.seed(mc_seeds[mc_idx])
-                res = simulate_route_esg_sla_des(start, end, config["placements"], config["logic"], congestion, delivery_mode, button_efficiency, base_door_time, fixed_door_moving_time, parking_usage_rate, stairs_floor, households_per_floor, regen_enabled, poisson_lambda, high_floor_penalty, idx_1f, total_fs, None, mode_label, shared_requests=shared_samples[mc_idx])
+                res = simulate_route_esg_sla_des(start, end, config["placements"], config["logic"], congestion, delivery_mode, button_efficiency, base_door_time, fixed_door_moving_time, parking_usage_rate, stairs_floor, households_per_floor, regen_enabled, poisson_lambda, idx_1f, total_fs, None, mode_label, shared_requests=shared_samples[mc_idx])
                 mc_data.append({"time": res[0], "kwh": res[1], "wait": res[2]["avg_wait_time"], "q": res[2]["avg_queue_len"], "sla": 100.0 if res[0] <= target_sla else (target_sla / res[0]) * 100})
             
             df_mc = pd.DataFrame(mc_data)
