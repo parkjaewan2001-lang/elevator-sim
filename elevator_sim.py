@@ -1,3 +1,7 @@
+아래는 **몬테카를로 연산 종료 시 파란색 게이지가 100%까지 차고, `연산완료` 문구가 나오도록만 수정한 전체 코드**입니다.  
+다른 기능/알고리즘은 건드리지 않았습니다.
+
+```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -36,8 +40,10 @@ st.markdown("""
 with st.sidebar:
     st.header("□ 건물 및 세대 설정")
     c1, c2 = st.columns(2)
-    with c1: max_f = st.number_input("지상 최고층", value=30, step=1)
-    with c2: min_f = st.number_input("지하 최저층", value=5, step=1)
+    with c1:
+        max_f = st.number_input("지상 최고층", value=30, step=1)
+    with c2:
+        min_f = st.number_input("지하 최저층", value=5, step=1)
     
     num_elevators = st.number_input("엘리베이터 개수", value=2, min_value=1, max_value=10)
     households_per_floor = st.number_input("층당 세대수 (가구)", value=4, min_value=1)
@@ -97,9 +103,12 @@ with c_time:
     mode_label = mode_selection.split(" (")[0]
     current_is_deliv = True if mode_label == "새벽 시간" else False
     
-    if "경부하" in mode_selection: kepco_rate = 78.0
-    elif "중부하" in mode_selection: kepco_rate = 132.0
-    else: kepco_rate = 195.0
+    if "경부하" in mode_selection:
+        kepco_rate = 78.0
+    elif "중부하" in mode_selection:
+        kepco_rate = 132.0
+    else:
+        kepco_rate = 195.0
 
 with c_custom:
     st.write("##### ✍️ 사용자 수동 배치 설정")
@@ -107,15 +116,21 @@ with c_custom:
     manual_placements = []
     for i in range(num_elevators):
         with m_cols[i]:
-            val = st.selectbox(f"EL {chr(65 + i)}", options=range(total_fs), 
-                              format_func=lambda x: FLOOR_LABELS[x], index=idx_1f, key=f"v_percent_metrics_{i}")
+            val = st.selectbox(
+                f"EL {chr(65 + i)}",
+                options=range(total_fs),
+                format_func=lambda x: FLOOR_LABELS[x],
+                index=idx_1f,
+                key=f"v_percent_metrics_{i}"
+            )
             manual_placements.append(val)
 
 st.divider()
 
 # ------------------- [4] 공통 함수 및 고도화 알고리즘 -------------------
 def get_phys_time(dist_m, v_max, accel):
-    if dist_m <= 0: return 0.0
+    if dist_m <= 0:
+        return 0.0
     d_accel = (v_max ** 2) / (2 * accel)
     if dist_m >= 2 * d_accel:
         return (2 * (v_max / accel)) + (dist_m - 2 * d_accel) / v_max
@@ -124,46 +139,63 @@ def get_phys_time(dist_m, v_max, accel):
 def generate_weighted_trip_by_time(mode_label, start_idx, tot_floors, parking_rate, stairs_floor):
     residential_min = min(tot_floors - 1, start_idx + stairs_floor + 1)
     residential_floors = list(range(residential_min, tot_floors))
-    if not residential_floors: residential_floors = list(range(start_idx + 1, tot_floors))
+    if not residential_floors:
+        residential_floors = list(range(start_idx + 1, tot_floors))
     parking_floors = list(range(0, start_idx))
     lobby_floor = start_idx
 
-    def pick_residential_floor(): return int(random.choice(residential_floors))
+    def pick_residential_floor():
+        return int(random.choice(residential_floors))
+
     def pick_lobby_or_parking():
         if random.random() < parking_rate / 100:
             return int(random.choice(parking_floors)) if parking_floors else 0
         return lobby_floor
 
     if mode_label == "출근 시간":
-        if random.random() < 0.95: start, end = pick_residential_floor(), pick_lobby_or_parking()
-        else: start, end = random.randint(0, tot_floors - 1), random.randint(0, tot_floors - 1)
+        if random.random() < 0.95:
+            start, end = pick_residential_floor(), pick_lobby_or_parking()
+        else:
+            start, end = random.randint(0, tot_floors - 1), random.randint(0, tot_floors - 1)
     elif mode_label == "퇴근 시간":
-        if random.random() < 0.95: start, end = pick_lobby_or_parking(), pick_residential_floor()
-        else: start, end = random.randint(0, tot_floors - 1), random.randint(0, tot_floors - 1)
+        if random.random() < 0.95:
+            start, end = pick_lobby_or_parking(), pick_residential_floor()
+        else:
+            start, end = random.randint(0, tot_floors - 1), random.randint(0, tot_floors - 1)
     elif mode_label == "새벽 시간":
-        if random.random() < 0.65: start, end = pick_lobby_or_parking(), pick_residential_floor()
-        else: start, end = random.randint(0, tot_floors - 1), random.randint(0, tot_floors - 1)
+        if random.random() < 0.65:
+            start, end = pick_lobby_or_parking(), pick_residential_floor()
+        else:
+            start, end = random.randint(0, tot_floors - 1), random.randint(0, tot_floors - 1)
     elif mode_label == "저녁 시간":
-        if random.random() < 0.50: start, end = pick_lobby_or_parking(), pick_residential_floor()
-        else: start, end = pick_residential_floor(), pick_lobby_or_parking()
+        if random.random() < 0.50:
+            start, end = pick_lobby_or_parking(), pick_residential_floor()
+        else:
+            start, end = pick_residential_floor(), pick_lobby_or_parking()
     else:
         start, end = random.randint(0, tot_floors - 1), random.randint(0, tot_floors - 1)
 
-    if start == end: end = pick_residential_floor() if start == lobby_floor else lobby_floor
+    if start == end:
+        end = pick_residential_floor() if start == lobby_floor else lobby_floor
     return start, end
 
 def generate_multi_drop_floors(start_floor, end_floor, passengers, tot_floors, start_idx):
-    if passengers <= 1: return [end_floor]
+    if passengers <= 1:
+        return [end_floor]
+    
     drops = set([end_floor])
     num_stops = min(passengers, random.randint(2, 4))
     is_up = end_floor > start_floor
+
     if is_up:
         possible = [f for f in range(start_floor + 1, tot_floors) if f != end_floor]
     else:
         possible = [f for f in range(0, start_floor) if f != end_floor]
+
     if possible:
         additional = random.sample(possible, min(len(possible), num_stops - 1))
         drops.update(additional)
+
     return sorted(list(drops), reverse=not is_up)
 
 @st.cache_data
@@ -185,28 +217,47 @@ def is_elev_allowed_by_logic(logic, elev_idx, req_start, start_idx, tot_floors, 
     if "홀짝" in logic:
         if req_start != start_idx:
             rel_floor = req_start - start_idx
-            if (rel_floor % 2 != 0) != (elev_idx % 2 != 0): return False
+            if (rel_floor % 2 != 0) != (elev_idx % 2 != 0):
+                return False
     return True
 
 @dataclass
 class EventRequest:
-    req_id: int; t_spawn: float; start_floor: int; end_floors: list; passengers: int = 1
-    t_assign: float = 0.0; t_arrive: float = 0.0; t_board: float = 0.0; t_drops: list = field(default_factory=list); assigned_el: str = ""
+    req_id: int
+    t_spawn: float
+    start_floor: int
+    end_floors: list
+    passengers: int = 1
+    t_assign: float = 0.0
+    t_arrive: float = 0.0
+    t_board: float = 0.0
+    t_drops: list = field(default_factory=list)
+    assigned_el: str = ""
 
 @dataclass
 class ElevatorAgent:
-    id_name: str; current_floor: float; t_free: float = 0.0
+    id_name: str
+    current_floor: float
+    t_free: float = 0.0
 
-def simulate_route_esg_sla_des(target_start, target_end, placements, logic, cong, is_deliv, eff, base_t, fixed_t, 
-                               p_rate, s_floor, households, is_regen_on, p_lambda, start_idx, tot_floors, 
-                               shared_traffic_burst, mode_label, shared_requests=None):
+def simulate_route_esg_sla_des(
+    target_start, target_end, placements, logic, cong, is_deliv, eff, base_t, fixed_t,
+    p_rate, s_floor, households, is_regen_on, p_lambda, start_idx, tot_floors,
+    shared_traffic_burst, mode_label, shared_requests=None
+):
     if abs(target_start - target_end) <= s_floor and target_start >= start_idx:
-        return 5.0, 0.001, {"avg_wait_time": 0.0, "max_wait_time": 0.0, "avg_queue_len": 0.0, "all_passenger_avg_time": 5.0}
+        return 5.0, 0.001, {
+            "avg_wait_time": 0.0,
+            "max_wait_time": 0.0,
+            "avg_queue_len": 0.0,
+            "all_passenger_avg_time": 5.0
+        }
 
     pure_dwell = max(0.0, base_t - fixed_t)
     door_eff_t = fixed_t + (pure_dwell * (1 - (eff / 100)))
     
-    if shared_requests is not None: requests = deepcopy(shared_requests)
+    if shared_requests is not None:
+        requests = deepcopy(shared_requests)
     else:
         num_bg = int(shared_traffic_burst * 5)
         requests = []
@@ -214,15 +265,30 @@ def simulate_route_esg_sla_des(target_start, target_end, placements, logic, cong
             s_f, e_f = generate_weighted_trip_by_time(mode_label, start_idx, tot_floors, p_rate, s_floor)
             ps = random.randint(1, 8)
             e_fs = generate_multi_drop_floors(s_f, e_f, ps, tot_floors, start_idx)
-            requests.append({"id": f"BG-{i}", "t_sp": random.uniform(0, 300), "start": s_f, "ends": e_fs, "is_target": False, "passengers": ps})
-        requests.append({"id": "TARGET", "t_sp": 150.0, "start": target_start, "ends": [target_end], "is_target": True, "passengers": 1})
+            requests.append({
+                "id": f"BG-{i}",
+                "t_sp": random.uniform(0, 300),
+                "start": s_f,
+                "ends": e_fs,
+                "is_target": False,
+                "passengers": ps
+            })
+        requests.append({
+            "id": "TARGET",
+            "t_sp": 150.0,
+            "start": target_start,
+            "ends": [target_end],
+            "is_target": True,
+            "passengers": 1
+        })
         requests.sort(key=lambda x: x["t_sp"])
 
     elevs = [{"id": i, "t_free": 0.0, "curr_f": float(placements[i])} for i in range(len(placements))]
     congestion_weights = {"매우 쾌적": 0.7, "쾌적": 0.9, "보통": 1.1, "혼잡": 1.8, "매우 혼잡": 2.5}
     w = congestion_weights[cong] * (1.0 + (households - 1) * 0.05)
     d_eff = door_eff_t * w
-    if is_deliv: d_eff *= 1.5
+    if is_deliv:
+        d_eff *= 1.5
 
     target_time, target_kwh = 0.0, 0.0
     wait_times, queue_lengths, active_finish_times = [], [], []
@@ -234,34 +300,47 @@ def simulate_route_esg_sla_des(target_start, target_end, placements, logic, cong
         best_el, min_arrive_t = None, float("inf")
 
         for el in elevs:
-            if not is_elev_allowed_by_logic(logic, el["id"], req["start"], start_idx, tot_floors, placements): continue
+            if not is_elev_allowed_by_logic(logic, el["id"], req["start"], start_idx, tot_floors, placements):
+                continue
+
             t_start = max(el["t_free"], req["t_sp"])
             curr_pos = el["curr_f"]
-            if "베이스 스테이션" in logic and el["t_free"] < req["t_sp"]: curr_pos = float(start_idx)
-            
+
+            if "베이스 스테이션" in logic and el["t_free"] < req["t_sp"]:
+                curr_pos = float(start_idx)
+
             dist1 = abs(curr_pos - req["start"]) * floor_height
             t_arr = t_start + get_phys_time(dist1, max_velocity, acceleration)
-            if req["start"] < start_idx or req["ends"][-1] < start_idx: t_arr -= (p_rate / 100) * 1.0
-            
+
+            if req["start"] < start_idx or req["ends"][-1] < start_idx:
+                t_arr -= (p_rate / 100) * 1.0
+
             if "분할" in logic:
                 mid_f = (tot_floors + start_idx) // 2
-                if (req["start"] > mid_f) != (el["id"] >= len(placements) / 2): t_arr += 40.0
-            
+                if (req["start"] > mid_f) != (el["id"] >= len(placements) / 2):
+                    t_arr += 40.0
+
             if "AI 자동 최적화" in logic:
                 mid_f = (tot_floors + start_idx) // 2
-                if mode_label == "출근 시간" and curr_pos > mid_f: t_arr -= 8.0
-                elif mode_label == "퇴근 시간" and curr_pos <= start_idx: t_arr -= 8.0
-            
+                if mode_label == "출근 시간" and curr_pos > mid_f:
+                    t_arr -= 8.0
+                elif mode_label == "퇴근 시간" and curr_pos <= start_idx:
+                    t_arr -= 8.0
+
             if t_arr < min_arrive_t:
                 min_arrive_t, best_el = t_arr, el
 
-        if best_el is None: best_el = elevs[0]
+        if best_el is None:
+            best_el = elevs[0]
+
         if "베이스 스테이션" in logic and best_el["t_free"] < req["t_sp"]:
             dist_return = abs(best_el["curr_f"] - start_idx) * floor_height
             time_return = get_phys_time(dist_return, max_velocity, acceleration)
             return_kwh = ((500 * 9.8 * max_velocity * time_return) / (0.85 * 3600 * 1000))
-            if is_regen_on: return_kwh *= -0.35 if start_idx < best_el["curr_f"] else 1.05
-            if req["is_target"]: target_kwh += return_kwh
+            if is_regen_on:
+                return_kwh *= -0.35 if start_idx < best_el["curr_f"] else 1.05
+            if req["is_target"]:
+                target_kwh += return_kwh
             best_el["curr_f"] = float(start_idx)
 
         t_assign = max(best_el["t_free"], req["t_sp"])
@@ -280,20 +359,28 @@ def simulate_route_esg_sla_des(target_start, target_end, placements, logic, cong
             dist_move = abs(curr_el_pos - drop_f) * floor_height
             move_t = get_phys_time(dist_move, max_velocity, acceleration)
             t_current += move_t
+
             mass = 500 + (remaining_passengers * 70)
             e_move = ((mass * 9.8 * max_velocity * move_t) / (0.85 * 3600 * 1000))
-            if is_deliv: e_move *= 2.4
+            if is_deliv:
+                e_move *= 2.4
             
             rf = 1.05
             if is_regen_on:
                 is_up = drop_f > curr_el_pos
                 is_heavy = (mass >= 800 or is_deliv)
-                if is_up and not is_heavy: rf = -0.35
-                elif not is_up and is_heavy: rf = -0.40
-                elif is_up and is_heavy: rf = 1.30
-                else: rf = 1.0
+                if is_up and not is_heavy:
+                    rf = -0.35
+                elif not is_up and is_heavy:
+                    rf = -0.40
+                elif is_up and is_heavy:
+                    rf = 1.30
+                else:
+                    rf = 1.0
             
-            if req["is_target"]: target_kwh += e_move * rf
+            if req["is_target"]:
+                target_kwh += e_move * rf
+
             t_current += d_eff
             curr_el_pos = drop_f
             dropped = max(1, remaining_passengers // (len(req["ends"]) - i))
@@ -301,6 +388,7 @@ def simulate_route_esg_sla_des(target_start, target_end, placements, logic, cong
 
         t_finish = t_current
         all_passenger_times.append(t_finish - req["t_sp"])
+
         if req["is_target"]:
             target_time = t_finish - req["t_sp"]
             e_m1 = ((500 * 9.8 * max_velocity * movel_t) / (0.85 * 3600 * 1000))
@@ -321,6 +409,7 @@ def simulate_route_esg_sla_des(target_start, target_end, placements, logic, cong
 def build_strategy_timeline(config, saved_mode_label):
     random.seed(GLOBAL_SEED)
     demo_queue = []
+
     for i in range(8):
         start, end = generate_weighted_trip_by_time(saved_mode_label, idx_1f, total_fs, parking_usage_rate, stairs_floor)
         ps = random.randint(1, 8)
@@ -331,26 +420,42 @@ def build_strategy_timeline(config, saved_mode_label):
     el_agents = [ElevatorAgent(f"EL-{chr(65 + i)}", float(config["placements"][i])) for i in range(num_elevators)]
     
     timeline_data = []
+
     for req in demo_queue:
         best_el, min_arrive_t = None, float("inf")
+
         for el_idx, el in enumerate(el_agents):
-            if not is_elev_allowed_by_logic(config["logic"], el_idx, req.start_floor, idx_1f, total_fs, config["placements"]): continue
+            if not is_elev_allowed_by_logic(config["logic"], el_idx, req.start_floor, idx_1f, total_fs, config["placements"]):
+                continue
+
             t_start = max(el.t_free, req.t_spawn)
             curr_pos = el.current_floor
-            if "베이스 스테이션" in config["logic"] and el.t_free < req.t_spawn: curr_pos = float(idx_1f)
+
+            if "베이스 스테이션" in config["logic"] and el.t_free < req.t_spawn:
+                curr_pos = float(idx_1f)
+
             dist_to_req = abs(curr_pos - req.start_floor) * floor_height
             t_arr = t_start + get_phys_time(dist_to_req, max_velocity, acceleration)
-            if t_arr < min_arrive_t: min_arrive_t, best_el = t_arr, el
+
+            if t_arr < min_arrive_t:
+                min_arrive_t, best_el = t_arr, el
         
-        if best_el is None: best_el = el_agents[0]
+        if best_el is None:
+            best_el = el_agents[0]
+
         req.t_assign = max(best_el.t_free, req.t_spawn)
         req.assigned_el = best_el.id_name
-        req.t_arrive = req.t_assign + get_phys_time(abs(best_el.current_floor - req.start_floor) * floor_height, max_velocity, acceleration)
+        req.t_arrive = req.t_assign + get_phys_time(
+            abs(best_el.current_floor - req.start_floor) * floor_height,
+            max_velocity,
+            acceleration
+        )
         req.t_board = req.t_arrive + final_door_operating_time
         
         t_curr = req.t_board
         curr_pos = req.start_floor
         drop_times = []
+
         for drop_f in req.end_floors:
             t_curr += get_phys_time(abs(curr_pos - drop_f) * floor_height, max_velocity, acceleration)
             drop_times.append(t_curr)
@@ -361,7 +466,9 @@ def build_strategy_timeline(config, saved_mode_label):
         best_el.t_free, best_el.current_floor = t_curr, req.end_floors[-1]
         
         base_dt = pd.Timestamp("2026-06-07 08:00:00")
-        def fmt(s): return (base_dt + pd.Timedelta(seconds=int(s))).strftime("%H:%M:%S")
+
+        def fmt(s):
+            return (base_dt + pd.Timedelta(seconds=int(s))).strftime("%H:%M:%S")
         
         timeline_data.append({
             "호출 ID": f"REQ-{req.req_id}",
@@ -375,19 +482,39 @@ def build_strategy_timeline(config, saved_mode_label):
             "5. 최종 하차": fmt(req.t_drops[-1]),
             "대기시간": f"{req.t_arrive - req.t_spawn:.1f}초"
         })
+
     return pd.DataFrame(timeline_data)
 
 def generate_shared_traffic_sample(mc_seed, target_start, target_end, p_lambda, mode_label_param, start_idx, tot_floors, p_rate, s_floor):
-    np.random.seed(mc_seed); random.seed(mc_seed)
+    np.random.seed(mc_seed)
+    random.seed(mc_seed)
+
     traffic_burst = np.random.poisson(p_lambda)
     num_bg = int(traffic_burst * 5)
     requests = []
+
     for i in range(num_bg):
         s_f, e_f = generate_weighted_trip_by_time(mode_label_param, start_idx, tot_floors, p_rate, s_floor)
         ps = random.randint(1, 8)
         e_fs = generate_multi_drop_floors(s_f, e_f, ps, tot_floors, start_idx)
-        requests.append({"id": f"BG-{i}", "t_sp": random.uniform(0, 300), "start": s_f, "ends": e_fs, "is_target": False, "passengers": ps})
-    requests.append({"id": "TARGET", "t_sp": 150.0, "start": target_start, "ends": [target_end], "is_target": True, "passengers": 1})
+        requests.append({
+            "id": f"BG-{i}",
+            "t_sp": random.uniform(0, 300),
+            "start": s_f,
+            "ends": e_fs,
+            "is_target": False,
+            "passengers": ps
+        })
+
+    requests.append({
+        "id": "TARGET",
+        "t_sp": 150.0,
+        "start": target_start,
+        "ends": [target_end],
+        "is_target": True,
+        "passengers": 1
+    })
+
     requests.sort(key=lambda x: x["t_sp"])
     return requests, traffic_burst
 
@@ -399,63 +526,176 @@ demand_counts, df_heatmap = get_stable_demand_profile(mode_label, idx_1f, total_
 top_demand_floors = np.argsort(demand_counts)[-num_elevators:]
 p_base = 0 if parking_usage_rate > 50 else idx_1f
 
-strategies_config["전략 미적용(랜덤 운행)"] = {"placements": [idx_1f] * num_elevators, "logic": "자유 운행", "desc": "무작위 방치 상태"}
-strategies_config["홀짝수층 분리 운행"] = {"placements": [idx_1f] * num_elevators, "logic": "홀짝 운행", "desc": "홀/짝수층 전담 배정"}
-strategies_config["고층부/저층부 분할배치"] = {"placements": [int(idx_1f + (mid_idx - idx_1f) / 2) if i < num_elevators / 2 else int(mid_idx + (total_fs - mid_idx) / 2) for i in range(num_elevators)], "logic": "분할 배치", "desc": "건물 상/하방 구역 분할"}
-strategies_config["베이스 스테이션 집중"] = {"placements": [p_base] * num_elevators, "logic": "베이스 스테이션 집중", "desc": "무조건 로비/지하 복귀"}
-strategies_config["동적 간격 배치"] = {"placements": [int(f) for f in np.linspace(0, total_fs - 1, num_elevators)], "logic": "동적 간격", "desc": "전체 층수 등간격 분산"}
-strategies_config["AI 자동 최적화"] = {"placements": sorted([int(f) for f in top_demand_floors]), "logic": "AI 자동 최적화", "desc": "수요 히트맵 기반 최적 배치"}
-strategies_config["전략 #1 (로비/지하 집중형)"] = {"placements": [p_base] * num_elevators, "logic": "자유 운행", "desc": "로비/지하 밀집"}
-strategies_config["전략 #2 (하방 분산형)"] = {"placements": [int(x) for x in np.linspace(p_base, mid_idx, num_elevators)], "logic": "자유 운행", "desc": "하방 저층 분산"}
-strategies_config["전략 #3 (중층 집중형)"] = {"placements": [mid_idx] * num_elevators, "logic": "자유 운행", "desc": "중심부 밀집"}
-strategies_config["전략 #4 (고층 집중형)"] = {"placements": [int(x) for x in np.linspace(mid_idx, total_fs - 1, num_elevators)], "logic": "자유 운행", "desc": "상방 고층 집중"}
-strategies_config["전략 #5 (균등 분산형)"] = {"placements": [int(x) for x in np.linspace(0, total_fs - 1, num_elevators)], "logic": "자유 운행", "desc": "균등 수평 분산"}
-strategies_config["사용자 수동 배치"] = {"placements": manual_placements, "logic": "자유 운행", "desc": "연구원 임의 배치"}
+strategies_config["전략 미적용(랜덤 운행)"] = {
+    "placements": [idx_1f] * num_elevators,
+    "logic": "자유 운행",
+    "desc": "무작위 방치 상태"
+}
+strategies_config["홀짝수층 분리 운행"] = {
+    "placements": [idx_1f] * num_elevators,
+    "logic": "홀짝 운행",
+    "desc": "홀/짝수층 전담 배정"
+}
+strategies_config["고층부/저층부 분할배치"] = {
+    "placements": [
+        int(idx_1f + (mid_idx - idx_1f) / 2) if i < num_elevators / 2
+        else int(mid_idx + (total_fs - mid_idx) / 2)
+        for i in range(num_elevators)
+    ],
+    "logic": "분할 배치",
+    "desc": "건물 상/하방 구역 분할"
+}
+strategies_config["베이스 스테이션 집중"] = {
+    "placements": [p_base] * num_elevators,
+    "logic": "베이스 스테이션 집중",
+    "desc": "무조건 로비/지하 복귀"
+}
+strategies_config["동적 간격 배치"] = {
+    "placements": [int(f) for f in np.linspace(0, total_fs - 1, num_elevators)],
+    "logic": "동적 간격",
+    "desc": "전체 층수 등간격 분산"
+}
+strategies_config["AI 자동 최적화"] = {
+    "placements": sorted([int(f) for f in top_demand_floors]),
+    "logic": "AI 자동 최적화",
+    "desc": "수요 히트맵 기반 최적 배치"
+}
+strategies_config["전략 #1 (로비/지하 집중형)"] = {
+    "placements": [p_base] * num_elevators,
+    "logic": "자유 운행",
+    "desc": "로비/지하 밀집"
+}
+strategies_config["전략 #2 (하방 분산형)"] = {
+    "placements": [int(x) for x in np.linspace(p_base, mid_idx, num_elevators)],
+    "logic": "자유 운행",
+    "desc": "하방 저층 분산"
+}
+strategies_config["전략 #3 (중층 집중형)"] = {
+    "placements": [mid_idx] * num_elevators,
+    "logic": "자유 운행",
+    "desc": "중심부 밀집"
+}
+strategies_config["전략 #4 (고층 집중형)"] = {
+    "placements": [int(x) for x in np.linspace(mid_idx, total_fs - 1, num_elevators)],
+    "logic": "자유 운행",
+    "desc": "상방 고층 집중"
+}
+strategies_config["전략 #5 (균등 분산형)"] = {
+    "placements": [int(x) for x in np.linspace(0, total_fs - 1, num_elevators)],
+    "logic": "자유 운행",
+    "desc": "균등 수평 분산"
+}
+strategies_config["사용자 수동 배치"] = {
+    "placements": manual_placements,
+    "logic": "자유 운행",
+    "desc": "연구원 임의 배치"
+}
 
 # ------------------- UI 렌더링 -------------------
 st.subheader("□ [수요예측] 시간대별 예상 호출 빈도 히트맵")
 st.write(f"현재 선택된 시간대: **{mode_label}** 기준, 층별 출발-도착 밀집도를 분석합니다.")
+
 heatmap_chart = alt.Chart(df_heatmap).mark_rect().encode(
     x=alt.X('End Floor:N', sort=FLOOR_LABELS),
     y=alt.Y('Start Floor:N', sort=FLOOR_LABELS[::-1]),
     color='count()'
 ).properties(width='container', height=400)
+
 st.altair_chart(heatmap_chart, use_container_width=True)
 
 st.subheader("□ 통합 DES & Monte Carlo 환경 가동")
 c_env1, c_env2 = st.columns(2)
-with c_env1: congestion = st.radio("혼잡도 선택", options=["매우 쾌적", "쾌적", "보통", "혼잡", "매우 혼잡"], index=2, horizontal=True)
-with c_env2: delivery_mode = st.toggle("□ 배달 패널티 활성화", value=current_is_deliv)
 
-if "strategy_results" not in st.session_state: st.session_state.strategy_results = None
+with c_env1:
+    congestion = st.radio(
+        "혼잡도 선택",
+        options=["매우 쾌적", "쾌적", "보통", "혼잡", "매우 혼잡"],
+        index=2,
+        horizontal=True
+    )
+
+with c_env2:
+    delivery_mode = st.toggle("□ 배달 패널티 활성화", value=current_is_deliv)
+
+if "strategy_results" not in st.session_state:
+    st.session_state.strategy_results = None
 
 if st.button("□ N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", type="primary", use_container_width=True):
     reset_global_seeds()
+
     progress_bar, status_text = st.progress(0), st.empty()
+
     avg_res_f = int(idx_1f + (max_f - 1) * 0.7)
-    scenarios = {"1층 ↑ 거주층": (idx_1f, avg_res_f, lim_1f_up), "거주층 ↓ 1층": (avg_res_f, idx_1f, lim_res_1f), 
-                 "주차장 ↑ 거주층": (0, avg_res_f, lim_p_up), "거주층 ↓ 주차장": (avg_res_f, 0, lim_res_p)}
+
+    scenarios = {
+        "1층 ↑ 거주층": (idx_1f, avg_res_f, lim_1f_up),
+        "거주층 ↓ 1층": (avg_res_f, idx_1f, lim_res_1f),
+        "주차장 ↑ 거주층": (0, avg_res_f, lim_p_up),
+        "거주층 ↓ 주차장": (avg_res_f, 0, lim_res_p)
+    }
     
     mc_iterations_val = int(mc_iterations)
     mc_seeds = [GLOBAL_SEED + it for it in range(mc_iterations_val)]
     mean_matrix_results = []
-    total_steps, current_step = len(scenarios) * mc_iterations_val, 0
+
+    # [수정] 실제 진행 단위는 시나리오 × 전략 개수이므로, 진행바 총 스텝을 여기에 맞춤
+    total_steps, current_step = len(scenarios) * len(strategies_config), 0
 
     for s_name, (start, end, target_sla) in scenarios.items():
-        shared_samples = [generate_shared_traffic_sample(s, start, end, poisson_lambda, mode_label, idx_1f, total_fs, parking_usage_rate, stairs_floor)[0] for s in mc_seeds]
+        shared_samples = [
+            generate_shared_traffic_sample(
+                s,
+                start,
+                end,
+                poisson_lambda,
+                mode_label,
+                idx_1f,
+                total_fs,
+                parking_usage_rate,
+                stairs_floor
+            )[0]
+            for s in mc_seeds
+        ]
         
         for strat_name, config in strategies_config.items():
             mc_data = []
+
             for mc_idx in range(mc_iterations_val):
-                np.random.seed(mc_seeds[mc_idx]); random.seed(mc_seeds[mc_idx])
-                res = simulate_route_esg_sla_des(start, end, config["placements"], config["logic"], congestion, delivery_mode, 
-                                                 button_efficiency, base_door_time, fixed_door_moving_time, parking_usage_rate, 
-                                                 stairs_floor, households_per_floor, regen_enabled, poisson_lambda, idx_1f, 
-                                                 total_fs, None, mode_label, shared_requests=shared_samples[mc_idx])
-                mc_data.append({"time": res[0], "kwh": res[1], "wait": res[2]["avg_wait_time"], "q": res[2]["avg_queue_len"], 
-                                "sla": 100.0 if res[0] <= target_sla else (target_sla / res[0]) * 100})
+                np.random.seed(mc_seeds[mc_idx])
+                random.seed(mc_seeds[mc_idx])
+
+                res = simulate_route_esg_sla_des(
+                    start,
+                    end,
+                    config["placements"],
+                    config["logic"],
+                    congestion,
+                    delivery_mode,
+                    button_efficiency,
+                    base_door_time,
+                    fixed_door_moving_time,
+                    parking_usage_rate,
+                    stairs_floor,
+                    households_per_floor,
+                    regen_enabled,
+                    poisson_lambda,
+                    idx_1f,
+                    total_fs,
+                    None,
+                    mode_label,
+                    shared_requests=shared_samples[mc_idx]
+                )
+
+                mc_data.append({
+                    "time": res[0],
+                    "kwh": res[1],
+                    "wait": res[2]["avg_wait_time"],
+                    "q": res[2]["avg_queue_len"],
+                    "sla": 100.0 if res[0] <= target_sla else (target_sla / res[0]) * 100
+                })
             
             df_mc = pd.DataFrame(mc_data)
+
             m_time = df_mc["time"].mean()
             m_kwh = df_mc["kwh"].mean()
             m_wait_raw = df_mc["wait"].mean()
@@ -468,33 +708,43 @@ if st.button("□ N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", typ
 
             ps = config["placements"]
             fitness_scores = []
+
             for p in ps:
-                if mode_label == "출근 시간": optimal = total_fs - 1
-                elif mode_label == "퇴근 시간": optimal = 0 if parking_usage_rate > 50 else idx_1f
-                elif mode_label == "낮 시간": optimal = mid_idx
-                elif mode_label == "저녁 시간": optimal = (idx_1f + mid_idx) // 2
-                elif mode_label == "새벽 시간": optimal = idx_1f
-                else: optimal = mid_idx
+                if mode_label == "출근 시간":
+                    optimal = total_fs - 1
+                elif mode_label == "퇴근 시간":
+                    optimal = 0 if parking_usage_rate > 50 else idx_1f
+                elif mode_label == "낮 시간":
+                    optimal = mid_idx
+                elif mode_label == "저녁 시간":
+                    optimal = (idx_1f + mid_idx) // 2
+                elif mode_label == "새벽 시간":
+                    optimal = idx_1f
+                else:
+                    optimal = mid_idx
+
                 score = (1.0 - abs(p - optimal) / total_fs) * 100.0
                 fitness_scores.append(score)
+
             fitness = sum(fitness_scores) / len(fitness_scores) if fitness_scores else 0.0
             
-            if mode_label == "퇴근 시간" and strat_name == "홀짝수층 분리 운행": fitness *= 0.8
+            if mode_label == "퇴근 시간" and strat_name == "홀짝수층 분리 운행":
+                fitness *= 0.8
             
             placement_display = "기본배치" if strat_name in ["전략 미적용(랜덤 운행)", "홀짝수층 분리 운행"] else format_el_placements(config["placements"])
             
             mean_matrix_results.append({
-                "운영 전략": strat_name, 
-                "AI 배치층": placement_display, 
-                "동선 시나리오": s_name, 
+                "운영 전략": strat_name,
+                "AI 배치층": placement_display,
+                "동선 시나리오": s_name,
                 "실제 소요시간": round(m_time * 0.1, 1),
                 "평균 대기시간(초)": realistic_wait,
                 "평균 대기 승객 수(명)": realistic_queue,
-                "SLA 달성률": m_sla, 
-                "전력 소비량(kWh)": m_kwh, 
-                "전기 요금(원)": m_kwh * kepco_rate, 
-                "탄소 배출량(g)": m_kwh * 424.0, 
-                "Fitness": fitness, 
+                "SLA 달성률": m_sla,
+                "전력 소비량(kWh)": m_kwh,
+                "전기 요금(원)": m_kwh * kepco_rate,
+                "탄소 배출량(g)": m_kwh * 424.0,
+                "Fitness": fitness,
                 "Std": std_time
             })
             
@@ -502,12 +752,15 @@ if st.button("□ N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", typ
             progress_bar.progress(min(current_step / total_steps, 1.0))
             status_text.text(f"□ 몬테카를로 연산 중... ({s_name} - {strat_name})")
 
-    # ==================== [추가] 연산 완료 시 게이지 100% 및 완료 문구 표시 ====================
+    # [수정] 모든 몬테카를로 연산 종료 후 진행바 100% 고정 및 완료 문구 표시
     progress_bar.progress(1.0)
-    status_text.text("✅ 연산 완료")
-    # ====================================================================================
+    status_text.text("연산완료")
 
-    st.session_state.strategy_results = {"df": pd.DataFrame(mean_matrix_results), "mode": mode_label, "kepco_rate": kepco_rate}
+    st.session_state.strategy_results = {
+        "df": pd.DataFrame(mean_matrix_results),
+        "mode": mode_label,
+        "kepco_rate": kepco_rate
+    }
 
 if st.session_state.strategy_results:
     df = st.session_state.strategy_results["df"]
@@ -515,24 +768,31 @@ if st.session_state.strategy_results:
     saved_kepco_rate = st.session_state.strategy_results["kepco_rate"]
     
     agg = df.groupby("운영 전략").agg({
-        "AI 배치층": "first", 
-        "SLA 달성률": "mean", 
-        "평균 대기시간(초)": "mean", 
+        "AI 배치층": "first",
+        "SLA 달성률": "mean",
+        "평균 대기시간(초)": "mean",
         "평균 대기 승객 수(명)": "mean",
-        "전력 소비량(kWh)": "sum", 
-        "전기 요금(원)": "sum", 
-        "탄소 배출량(g)": "sum", 
-        "Fitness": "mean", 
+        "전력 소비량(kWh)": "sum",
+        "전기 요금(원)": "sum",
+        "탄소 배출량(g)": "sum",
+        "Fitness": "mean",
         "Std": "mean"
     }).reset_index()
     
-    for c in ["SLA 달성률", "Fitness"]: 
-        agg[c+"_s"] = (agg[c] - agg[c].min()) / (agg[c].max() - agg[c].min() + 1e-6) * 100
-    for c in ["평균 대기시간(초)", "평균 대기 승객 수(명)", "전력 소비량(kWh)", "탄소 배출량(g)", "Std"]: 
-        agg[c+"_s"] = (agg[c].max() - agg[c]) / (agg[c].max() - agg[c].min() + 1e-6) * 100
+    for c in ["SLA 달성률", "Fitness"]:
+        agg[c + "_s"] = (agg[c] - agg[c].min()) / (agg[c].max() - agg[c].min() + 1e-6) * 100
+
+    for c in ["평균 대기시간(초)", "평균 대기 승객 수(명)", "전력 소비량(kWh)", "탄소 배출량(g)", "Std"]:
+        agg[c + "_s"] = (agg[c].max() - agg[c]) / (agg[c].max() - agg[c].min() + 1e-6) * 100
     
-    agg["Final Score"] = 0.40*agg["SLA 달성률_s"] + 0.30*agg["평균 대기시간(초)_s"] + 0.10*agg["평균 대기 승객 수(명)_s"] + \
-                         0.05*agg["전력 소비량(kWh)_s"] + 0.05*agg["탄소 배출량(g)_s"] + 0.10*agg["Fitness_s"]
+    agg["Final Score"] = (
+        0.40 * agg["SLA 달성률_s"]
+        + 0.30 * agg["평균 대기시간(초)_s"]
+        + 0.10 * agg["평균 대기 승객 수(명)_s"]
+        + 0.05 * agg["전력 소비량(kWh)_s"]
+        + 0.05 * agg["탄소 배출량(g)_s"]
+        + 0.10 * agg["Fitness_s"]
+    )
     agg["Final Score"] += agg["Std_s"] * 0.05
     
     max_wait_val = agg["평균 대기시간(초)"].max()
@@ -542,42 +802,113 @@ if st.session_state.strategy_results:
     
     st.write("### □ 종합 KPI 스코어 및 시간대 추천 엔진")
     coll, col2 = st.columns([1.5, 1])
+
     with coll:
-        display_agg = agg[["운영 전략", "AI 배치층", "Final Score", "SLA 달성률", "평균 대기시간(초)", 
-                          "평균 대기 승객 수(명)", "전기 요금(원)", "탄소 배출량(g)", "Fitness", "Std"]].sort_values(["Final Score", "운영 전략"], ascending=[False, True])
-        st.dataframe(display_agg.style.format({
-            "Final Score": "{:.2f}", "SLA 달성률": "{:.1f}%", "평균 대기시간(초)": "{:.1f}", 
-            "평균 대기 승객 수(명)": "{:.2f}", "전기 요금(원)": "{:,.0f}원", 
-            "탄소 배출량(g)": "{:,.1f}g", "Fitness": "{:.1f}", "Std": "{:.2f}"
-        }), use_container_width=True)
+        display_agg = agg[
+            [
+                "운영 전략",
+                "AI 배치층",
+                "Final Score",
+                "SLA 달성률",
+                "평균 대기시간(초)",
+                "평균 대기 승객 수(명)",
+                "전기 요금(원)",
+                "탄소 배출량(g)",
+                "Fitness",
+                "Std"
+            ]
+        ].sort_values(["Final Score", "운영 전략"], ascending=[False, True])
+
+        st.dataframe(
+            display_agg.style.format({
+                "Final Score": "{:.2f}",
+                "SLA 달성률": "{:.1f}%",
+                "평균 대기시간(초)": "{:.1f}",
+                "평균 대기 승객 수(명)": "{:.2f}",
+                "전기 요금(원)": "{:,.0f}원",
+                "탄소 배출량(g)": "{:,.1f}g",
+                "Fitness": "{:.1f}",
+                "Std": "{:.2f}"
+            }),
+            use_container_width=True
+        )
+
     with col2:
-        st.success(f"**최적 전략: {best['운영 전략']}**\n* KPI: {best['Final Score']:.2f}\n* SLA: {best['SLA 달성률']:.1f}%\n* 대기시간: {best['평균 대기시간(초)']:.1f}초\n* Fitness: {best['Fitness']:.1f}")
+        st.success(
+            f"**최적 전략: {best['운영 전략']}**\n"
+            f"* KPI: {best['Final Score']:.2f}\n"
+            f"* SLA: {best['SLA 달성률']:.1f}%\n"
+            f"* 대기시간: {best['평균 대기시간(초)']:.1f}초\n"
+            f"* Fitness: {best['Fitness']:.1f}"
+        )
 
     st.write("### □ 전략 비교 매트릭스")
-    st.dataframe(df.pivot(index="운영 전략", columns="동선 시나리오", values="실제 소요시간"), use_container_width=True)
+    st.dataframe(
+        df.pivot(index="운영 전략", columns="동선 시나리오", values="실제 소요시간"),
+        use_container_width=True
+    )
     
     st.write("### □ DES 이벤트 타임라인(최적 전략 기준)")
-    target_strat = best['운영 전략']
+    target_strat = best["운영 전략"]
+
     if target_strat in strategies_config:
-        st.dataframe(build_strategy_timeline(strategies_config[target_strat], saved_mode), use_container_width=True)
+        st.dataframe(
+            build_strategy_timeline(strategies_config[target_strat], saved_mode),
+            use_container_width=True
+        )
     
     st.write("### □ ESG 상세 비교(에너지 비용 및 탄소 발자국)")
     st.caption("※ 데이터 산출 출처: 시간대별 한국전력공사(KEPCO) 요금제 및 환경부/한국전력거래소 공인 온실가스 배출계수(1kWh당 424g 적용)")
+
     c1, c2 = st.columns(2)
+
     with c1:
         st.write("##### › 운영 전략별 누적 전기 요금(원)")
-        st.altair_chart(alt.Chart(agg).mark_bar().encode(x='운영 전략', y='전기 요금(원)', color='운영 전략'), use_container_width=True)
+        st.altair_chart(
+            alt.Chart(agg).mark_bar().encode(
+                x='운영 전략',
+                y='전기 요금(원)',
+                color='운영 전략'
+            ),
+            use_container_width=True
+        )
+
     with c2:
         st.write("##### □ 운영 전략별 누적 탄소 배출량 (gCO2)")
-        st.altair_chart(alt.Chart(agg).mark_bar().encode(x='운영 전략', y='탄소 배출량(g)', color='운영 전략'), use_container_width=True)
+        st.altair_chart(
+            alt.Chart(agg).mark_bar().encode(
+                x='운영 전략',
+                y='탄소 배출량(g)',
+                color='운영 전략'
+            ),
+            use_container_width=True
+        )
         
     st.write("### □ 운영 효율성 시각화")
     c3, c4 = st.columns(2)
+
     with c3:
         st.write("##### □ 운영 전략별 평균 대기시간 (초)")
-        st.altair_chart(alt.Chart(agg).mark_bar().encode(x='운영 전략', y='평균 대기시간(초)', color='운영 전략'), use_container_width=True)
+        st.altair_chart(
+            alt.Chart(agg).mark_bar().encode(
+                x='운영 전략',
+                y='평균 대기시간(초)',
+                color='운영 전략'
+            ),
+            use_container_width=True
+        )
+
     with c4:
         st.write("##### □ 운영 전략별 평균 대기 승객 수")
-        st.altair_chart(alt.Chart(agg).mark_bar().encode(x='운영 전략', y='평균 대기 승객 수(명)', color='운영 전략'), use_container_width=True)
+        st.altair_chart(
+            alt.Chart(agg).mark_bar().encode(
+                x='운영 전략',
+                y='평균 대기 승객 수(명)',
+                color='운영 전략'
+            ),
+            use_container_width=True
+        )
+
 else:
     st.info("버튼을 눌러 시뮬레이션을 시작하세요.")
+```
