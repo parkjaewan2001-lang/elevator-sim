@@ -300,7 +300,8 @@ def simulate_route_esg_sla_des(
             curr_el_pos = drop_f
             if i < len(req["ends"]) - 1: # 마지막 하차 층이 아니면 문 열림/닫힘 시간 추가
                 t_current += d_eff
-                remaining_passengers -= random.randint(1, remaining_passengers) # 일부 승객 하차
+                if remaining_passengers > 0:
+                    remaining_passengers -= random.randint(1, remaining_passengers) # 일부 승객 하차
             
         t_finish = t_current
         best_el["t_free"] = t_finish
@@ -794,7 +795,8 @@ def build_strategy_timeline(strategy_config, mode_label):
             move_sequence.append(FLOOR_LABELS[drop_f])
             if i < len(req["ends"]) - 1: 
                 t_current += d_eff
-                remaining_passengers -= random.randint(1, remaining_passengers) # 일부 승객 하차
+                if remaining_passengers > 0:
+                    remaining_passengers -= random.randint(1, remaining_passengers) # 일부 승객 하차
 
         t_finish = t_current
         best_el["t_free"] = t_finish
