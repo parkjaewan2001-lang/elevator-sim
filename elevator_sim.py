@@ -1,6 +1,3 @@
-요청하신 대로 **연산 완료 시 게이지 100% 및 "✅ 연산 완료" 문구** 표시만 추가한 전체 코드입니다.
-
-```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -584,6 +581,3 @@ if st.session_state.strategy_results:
         st.altair_chart(alt.Chart(agg).mark_bar().encode(x='운영 전략', y='평균 대기 승객 수(명)', color='운영 전략'), use_container_width=True)
 else:
     st.info("버튼을 눌러 시뮬레이션을 시작하세요.")
-```
-
-이제 연산이 완료되면 **파란색 게이지가 끝까지 차오르고 "✅ 연산 완료"** 문구가 표시됩니다.
