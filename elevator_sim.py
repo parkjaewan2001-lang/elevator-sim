@@ -25,8 +25,9 @@ st.markdown("""
 > 💡 **Simulation Methodology (연구 방법론):**
 > * **현실적 다중 하차 (Multi-Drop Routing):** 이제 그룹 승객은 한 층이 아닌 **여러 층(예: 27F → 15F → 1F)**에 걸쳐 순차적으로 하차하며, 각 정차 시의 문 열림과 하중 변화가 실시간 반영됩니다.
 > * **현실적 그룹 탑승 (Group Boarding):** 승객은 1~8명의 그룹 단위로 생성되며, 인원수에 따라 엘리베이터의 하중과 에너지 소비량이 정밀하게 계산됩니다.
-> * **완벽한 재현성 (Reproducibility):** 동일 입력 시 항상 동일한 AI 배치와 추천 결과가 나오도록 캐싱과 시드 초기화를 강제했습니다.
+> * **높은 신뢰도의 재현성 (Reproducibility):** 동일 입력 시 항상 동일한 AI 배치와 추천 결과가 나오도록 캐싱과 시드 초기화를 강제했습니다.
 > * **서비스 품질 우선(Quality-First):** 대기시간 최악 전략은 추천에서 배제하며, SLA와 대기시간에 70% 가중치를 부여합니다.
+> * **ESG 산출 근거:** 전력 소비 요금은 한국전력공사(KEPCO) 시간대별 요금제를, 탄소 배출량은 환경부 및 한국전력거래소 공인 온실가스 배출계수(424g/kWh)를 기준으로 엄격히 산출되었습니다.
 """)
 
 # ----------------- [2] SIDEBAR: 설정 변수 -----------------
@@ -405,11 +406,11 @@ strategies_config["고층부/저층부 분할배치"] = {"placements": [int(idx_
 strategies_config["베이스 스테이션 집중"] = {"placements": [p_base] * num_elevators, "logic": "베이스 스테이션 집중", "desc": "무조건 로비/지하 복귀"}
 strategies_config["동적 간격 배치"] = {"placements": [int(f) for f in np.linspace(0, total_fs - 1, num_elevators)], "logic": "동적 간격", "desc": "전체 층수 등간격 분산"}
 strategies_config["AI 자동 최적화"] = {"placements": sorted([int(f) for f in top_demand_floors]), "logic": "AI 자동 최적화", "desc": "수요 히트맵 기반 최적 배치"}
-strategies_config["AI Generated Strategy #1 (로비/지하 집중형)"] = {"placements": [p_base] * num_elevators, "logic": "자유 운행", "desc": "로비/지하 밀집"}
-strategies_config["AI Generated Strategy #2 (하방 분산형)"] = {"placements": [int(x) for x in np.linspace(p_base, mid_idx, num_elevators)], "logic": "자유 운행", "desc": "하방 저층 분산"}
-strategies_config["AI Generated Strategy #3 (중층 집중형)"] = {"placements": [mid_idx] * num_elevators, "logic": "자유 운행", "desc": "중심부 밀집"}
-strategies_config["AI Generated Strategy #4 (고층 집중형)"] = {"placements": [int(x) for x in np.linspace(mid_idx, total_fs - 1, num_elevators)], "logic": "자유 운행", "desc": "상방 고층 집중"}
-strategies_config["AI Generated Strategy #5 (균등 분산형)"] = {"placements": [int(x) for x in np.linspace(0, total_fs - 1, num_elevators)], "logic": "자유 운행", "desc": "균등 수평 분산"}
+strategies_config["전략 #1 (로비/지하 집중형)"] = {"placements": [p_base] * num_elevators, "logic": "자유 운행", "desc": "로비/지하 밀집"}
+strategies_config["전략 #2 (하방 분산형)"] = {"placements": [int(x) for x in np.linspace(p_base, mid_idx, num_elevators)], "logic": "자유 운행", "desc": "하방 저층 분산"}
+strategies_config["전략 #3 (중층 집중형)"] = {"placements": [mid_idx] * num_elevators, "logic": "자유 운행", "desc": "중심부 밀집"}
+strategies_config["전략 #4 (고층 집중형)"] = {"placements": [int(x) for x in np.linspace(mid_idx, total_fs - 1, num_elevators)], "logic": "자유 운행", "desc": "상방 고층 집중"}
+strategies_config["전략 #5 (균등 분산형)"] = {"placements": [int(x) for x in np.linspace(0, total_fs - 1, num_elevators)], "logic": "자유 운행", "desc": "균등 수평 분산"}
 strategies_config["사용자 수동 배치"] = {"placements": manual_placements, "logic": "자유 운행", "desc": "연구원 임의 배치"}
 
 # ----------------- UI 렌더링 -----------------
@@ -534,6 +535,7 @@ if st.session_state.strategy_results:
         st.dataframe(build_strategy_timeline(strategies_config[best['운영 전략']], saved_mode), use_container_width=True)
 
     st.write("### 🌿 ESG 상세 비교 (에너지 비용 및 탄소 발자국)")
+    st.caption("※ 데이터 산출 출처: 시간대별 한국전력공사(KEPCO) 요금제 및 환경부/한국전력거래소 공인 온실가스 배출계수(1kWh당 424g 적용)")
     c1, c2 = st.columns(2)
     with c1: 
         st.write("##### ⚡ 운영 전략별 누적 전기 요금 (원)")
