@@ -25,7 +25,9 @@ st.markdown("""
 > **Simulation Methodology (연구 방법론):**  
 > * **현실적 다중 하차(Multi-Drop Routing):** 그룹 승객은 한 층이 아닌 여러 층에 순차적으로 하차하며, 각 정차 시 문 열림과 하중 변화가 실시간 반영됩니다.  
 > * **현실적 그룹 탑승 (Group Boarding):** 승객은 1~8명 단위로 생성되며, 인원수에 따라 하중과 에너지 소비량이 정밀 계산됩니다.  
-> * **KPI 산출 근거:** 평균 대기시간과 평균 대기 승객 수는 Monte Carlo 시뮬레이션(총 5분相当 트래픽)에서 도출된 raw 값을 **현실적인 빌딩 운영 기준**에 맞게 보정 계수를 적용하여 표시합니다. (보정 계수: 대기시간 × 0.28, Queue 길이 × 0.45). 이는 실제 오피스/주거 복합 빌딩의 실측 데이터 범위(출근시간대 평균 대기시간 45~90초, 평균 대기인원 1.2~3.0명)를 참고하여 조정되었습니다.  
+> * **KPI 산출 근거:**  
+>   - 평균 대기시간(초) = Raw 대기시간 × 0.28  
+>   - 평균 대기 승객 수(명) = Raw Queue 길이 × 0.45  
 > * **높은 신뢰도의 재현성(Reproducibility):** 동일 입력 시 항상 동일한 AI 배치와 추천 결과가 나오도록 캐싱과 시드 초기화를 강제했습니다.  
 > * **서비스 품질 우선(Quality-First):** 대기시간 최악 전략은 추천에서 배제하며, SLA와 대기시간에 70% 가중치를 부여합니다.  
 > * **ESG 산출 근거:** 전력 소비 요금은 한국전력공사(KEPCO) 시간대별 요금제를, 탄소 배출량은 환경부 및 한국전력거래소 공인 온실가스 배출계수(424g/kWh)를 기준으로 엄격히 산출되었습니다.
@@ -113,7 +115,6 @@ with c_custom:
 st.divider()
 
 # ------------------- [4] 공통 함수 및 고도화 알고리즘 -------------------
-# (기존 코드와 완전히 동일 - 단 한 줄도 수정하지 않음)
 def get_phys_time(dist_m, v_max, accel):
     if dist_m <= 0: return 0.0
     d_accel = (v_max ** 2) / (2 * accel)
@@ -318,8 +319,6 @@ def simulate_route_esg_sla_des(target_start, target_end, placements, logic, cong
         "all_passenger_avg_time": float(np.mean(all_passenger_times))
     }
 
-# ... (build_strategy_timeline, generate_shared_traffic_sample 함수들도 기존과 완전히 동일하게 유지 - 생략 없이 그대로 사용)
-
 def build_strategy_timeline(config, saved_mode_label):
     random.seed(GLOBAL_SEED)
     demo_queue = []
@@ -465,10 +464,8 @@ if st.button("□ N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", typ
             m_sla = df_mc["sla"].mean()
             std_time = df_mc["time"].std()
 
-            # ==================== 현실적 값 보정 (여기서만 수정) ====================
-            realistic_wait = round(m_wait_raw * 0.28, 1)      # 평균 대기시간 현실화
-            realistic_queue = round(m_q_raw * 0.45, 2)        # 평균 Queue 길이 현실화
-            # =====================================================================
+            realistic_wait = round(m_wait_raw * 0.28, 1)
+            realistic_queue = round(m_q_raw * 0.45, 2)
 
             ps = config["placements"]
             fitness_scores = []
@@ -508,7 +505,6 @@ if st.button("□ N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", typ
 
     st.session_state.strategy_results = {"df": pd.DataFrame(mean_matrix_results), "mode": mode_label, "kepco_rate": kepco_rate}
 
-# ==================== 이하 UI 출력 부분 ====================
 if st.session_state.strategy_results:
     df = st.session_state.strategy_results["df"]
     saved_mode = st.session_state.strategy_results["mode"]
@@ -526,7 +522,6 @@ if st.session_state.strategy_results:
         "Std": "mean"
     }).reset_index()
     
-    # ... (이하 기존 코드와 동일 - Final Score 계산, Best 전략 선정 등)
     for c in ["SLA 달성률", "Fitness"]: 
         agg[c+"_s"] = (agg[c] - agg[c].min()) / (agg[c].max() - agg[c].min() + 1e-6) * 100
     for c in ["평균 대기시간(초)", "평균 대기 승객 수(명)", "전력 소비량(kWh)", "탄소 배출량(g)", "Std"]: 
@@ -557,7 +552,6 @@ if st.session_state.strategy_results:
     st.write("### □ 전략 비교 매트릭스")
     st.dataframe(df.pivot(index="운영 전략", columns="동선 시나리오", values="실제 소요시간"), use_container_width=True)
     
-    # 나머지 차트 및 타임라인 출력 부분은 기존과 동일
     st.write("### □ DES 이벤트 타임라인(최적 전략 기준)")
     target_strat = best['운영 전략']
     if target_strat in strategies_config:
