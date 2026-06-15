@@ -1,7 +1,3 @@
-아래는 **몬테카를로 연산 종료 시 파란색 게이지가 100%까지 차고, `연산완료` 문구가 나오도록만 수정한 전체 코드**입니다.  
-다른 기능/알고리즘은 건드리지 않았습니다.
-
-```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -911,4 +907,3 @@ if st.session_state.strategy_results:
 
 else:
     st.info("버튼을 눌러 시뮬레이션을 시작하세요.")
-```
