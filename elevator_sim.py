@@ -25,7 +25,7 @@ st.markdown("""
 > 💡 **Simulation Methodology (연구 방법론):**
 > * **현실적 다중 하차 (Multi-Drop Routing):** 이제 그룹 승객은 한 층이 아닌 **여러 층(예: 27F → 15F → 1F)**에 걸쳐 순차적으로 하차하며, 각 정차 시의 문 열림과 하중 변화가 실시간 반영됩니다.
 > * **현실적 그룹 탑승 (Group Boarding):** 승객은 1~8명의 그룹 단위로 생성되며, 인원수에 따라 엘리베이터의 하중과 에너지 소비량이 정밀하게 계산됩니다.
-> * **높은 신뢰도의 재현성 (Reproducibility):** 동일 입력 시 항상 동일한 AI 배치와 추천 결과가 나오도록 캐싱과 시드 초기화를 강제했습니다.
+> * **높은 신뢰도의 재현성 (Reproducibility):** 동일 입력 시 항상 동일한 배치와 추천 결과가 나오도록 캐싱과 시드 초기화를 강제했습니다.
 > * **서비스 품질 우선(Quality-First):** 대기시간 최악 전략은 추천에서 배제하며, SLA와 대기시간에 70% 가중치를 부여합니다.
 > * **ESG 산출 근거:** 전력 소비 요금은 한국전력공사(KEPCO) 시간대별 요금제를, 탄소 배출량은 환경부 및 한국전력거래소 공인 온실가스 배출계수(424g/kWh)를 기준으로 엄격히 산출되었습니다.
 """)
@@ -210,14 +210,14 @@ def simulate_route_esg_sla_des(
 
     if shared_requests is not None: requests = deepcopy(shared_requests)
     else:
-        num_bg = int(shared_traffic_burst * 5)
+        num_bg = int(shared_traffic_burst * 2) # 트래픽 집중도 완화 (5 -> 2)
         requests = []
         for i in range(num_bg):
             s_f, e_f = generate_weighted_trip_by_time(mode_label, start_idx, tot_floors, p_rate, s_floor)
             ps = random.randint(1, 8)
             e_fs = generate_multi_drop_floors(s_f, e_f, ps, tot_floors, start_idx)
-            requests.append({"id": f"BG-{i}", "t_sp": random.uniform(0, 300), "start": s_f, "ends": e_fs, "is_target": False, "passengers": ps})
-        requests.append({"id": "TARGET", "t_sp": 150.0, "start": target_start, "ends": [target_end], "is_target": True, "passengers": 1})
+            requests.append({"id": f"BG-{i}", "t_sp": random.uniform(0, 600), "start": s_f, "ends": e_fs, "is_target": False, "passengers": ps}) # 10분(600초) 분산
+        requests.append({"id": "TARGET", "t_sp": 300.0, "start": target_start, "ends": [target_end], "is_target": True, "passengers": 1}) # 타겟 시간 재조정
         requests.sort(key=lambda x: x["t_sp"])
 
     elevs = [{"id": i, "t_free": 0.0, "curr_f": float(placements[i])} for i in range(len(placements))]
@@ -380,14 +380,14 @@ def build_strategy_timeline(config, saved_mode_label):
 def generate_shared_traffic_sample(mc_seed, target_start, target_end, p_lambda, mode_label_param, start_idx, tot_floors, p_rate, s_floor):
     np.random.seed(mc_seed); random.seed(mc_seed)
     traffic_burst = np.random.poisson(p_lambda)
-    num_bg = int(traffic_burst * 5)
+    num_bg = int(traffic_burst * 2) # 트래픽 집중도 완화 (5 -> 2)
     requests = []
     for i in range(num_bg):
         s_f, e_f = generate_weighted_trip_by_time(mode_label_param, start_idx, tot_floors, p_rate, s_floor)
         ps = random.randint(1, 8)
         e_fs = generate_multi_drop_floors(s_f, e_f, ps, tot_floors, start_idx)
-        requests.append({"id": f"BG-{i}", "t_sp": random.uniform(0, 300), "start": s_f, "ends": e_fs, "is_target": False, "passengers": ps})
-    requests.append({"id": "TARGET", "t_sp": 150.0, "start": target_start, "ends": [target_end], "is_target": True, "passengers": 1})
+        requests.append({"id": f"BG-{i}", "t_sp": random.uniform(0, 600), "start": s_f, "ends": e_fs, "is_target": False, "passengers": ps}) # 10분(600초) 분산
+    requests.append({"id": "TARGET", "t_sp": 300.0, "start": target_start, "ends": [target_end], "is_target": True, "passengers": 1}) # 타겟 시간 재조정
     requests.sort(key=lambda x: x["t_sp"])
     return requests, traffic_burst
 
@@ -450,7 +450,6 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
             m_time, m_kwh, m_wait, m_q, m_sla = df_mc["time"].mean(), df_mc["kwh"].mean(), df_mc["wait"].mean(), df_mc["q"].mean(), df_mc["sla"].mean()
             std_time = df_mc["time"].std()
 
-            # [수정 적용 완료] 최적 층과의 상대적 거리를 계산하여 연속형 소수점 Fitness 부여
             ps = config["placements"]
             fitness_scores = []
             for p in ps:
@@ -466,7 +465,6 @@ if st.button("🚀 N회 반복 시뮬레이션 및 종합 KPI 탐색 산출", ty
             
             fitness = sum(fitness_scores) / len(fitness_scores) if fitness_scores else 0.0
             
-            # 홀짝 운행은 퇴근 시간대 특정 층 쏠림에 취약하므로 패널티 부과 (다양성 확보)
             if mode_label == "퇴근 시간" and strat_name == "홀짝수층 분리 운행": 
                 fitness *= 0.8 
 
